@@ -310,7 +310,7 @@ class NativeReActAgent(ToolUsingAgent):
                 )
 
             # Anti-hallucination check for fake action claims without tool execution
-            fake_pattern = r"\b(ha sido enviado|he enviado|mensaje enviado|se envi[oó]|se ha enviado|captura tomada|he tomado la captura|captura enviada|evento creado|evento agendado|tarea creada|he creado la tarea|archivo modificado|correo enviado)\b"
+            fake_pattern = r"\b(ha sido enviado|he enviado|mensaje enviado|se envi[oó]|se ha enviado|captura tomada|he tomado la captura|captura enviada|evento creado|evento agendado|tarea creada|he creado la tarea|archivo modificado|correo enviado|chat abierto|he abierto el chat|conversaci[oó]n abierta)\b"
             if not all_tool_results and turns < (self._max_turns or 10) - 1:
                 target_check = parsed.get("final_answer") or content
                 m_claim = re.search(fake_pattern, target_check, re.IGNORECASE)
@@ -322,8 +322,9 @@ class NativeReActAgent(ToolUsingAgent):
                             role=Role.USER,
                             content=(
                                 f"ERROR DE VERACIDAD: Afirmaste '{m_claim.group(0)}', pero NO ejecutaste ninguna herramienta en este turno. "
-                                "Tienes terminantemente prohibido fingir que enviaste un mensaje, tomaste una captura o ejecutaste una acción externa sin haber invocado la herramienta correspondiente. "
-                                "Si requieres realizar la acción, invoca la herramienta ahora (ej. gui_automation con send_desktop_message, screen_vision, google_gmail, etc.). "
+                                "Tienes terminantemente prohibido fingir que enviaste un mensaje, abriste un chat, tomaste una captura o ejecutaste una acción externa sin haber invocado la herramienta correspondiente. "
+                                "Si requieres abrir un chat de WhatsApp/ZapZap, invoca gui_automation con action='whatsapp_open_chat' y contact='...'. "
+                                "Si requieres enviar un mensaje, invoca gui_automation con action='send_desktop_message'. "
                                 "Si no tienes una herramienta para hacerlo directamente, responde con honestidad total explicando tus límites."
                             ),
                         )

@@ -26,8 +26,63 @@ except ImportError:
 
 
 def _focus_desktop_app(app_name: str) -> bool:
-    """Bring specified application window to the foreground under KDE/Wayland."""
+    """Bring specified application window to the foreground under KDE Plasma / Wayland."""
     name = app_name.lower().strip()
+    target_query = name
+    if name in ("whatsapp", "zap", "zapzap"):
+        target_query = "zapzap"
+    elif name in ("code", "ide"):
+        target_query = "antigravity"
+    elif name in ("chrome", "browser"):
+        target_query = "chrome"
+    elif name in ("tg", "telegram"):
+        target_query = "telegram"
+
+    # 1. Primary: KWin D-Bus scripting to bypass Wayland Focus Stealing Prevention
+    try:
+        script = f"""
+        var clients = workspace.windowList();
+        for (var i = 0; i < clients.length; i++) {{
+            var c = clients[i];
+            var cap = c.caption ? c.caption.toLowerCase() : "";
+            var rc = c.resourceClass ? c.resourceClass.toLowerCase() : "";
+            if (cap.indexOf("{target_query}") !== -1 || rc.indexOf("{target_query}") !== -1) {{
+                c.minimized = false;
+                workspace.activeWindow = c;
+                break;
+            }}
+        }}
+        """
+        script_file = f"/tmp/kwin_focus_{target_query}.js"
+        with open(script_file, "w") as f:
+            f.write(script)
+
+        plugin_name = f"focus_{target_query}"
+        subprocess.run(
+            ["qdbus6", "org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.unloadScript", plugin_name],
+            capture_output=True,
+            timeout=3,
+        )
+        time.sleep(0.04)
+        load_res = subprocess.run(
+            ["qdbus6", "org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.loadScript", script_file, plugin_name],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        sid = load_res.stdout.strip()
+        if sid.isdigit() and int(sid) >= 0:
+            subprocess.run(
+                ["qdbus6", "org.kde.KWin", f"/Scripting/Script{sid}", "org.kde.kwin.Script.run"],
+                capture_output=True,
+                timeout=3,
+            )
+            time.sleep(0.35)
+            return True
+    except Exception as exc:
+        logger.debug("KWin script focus failed: %s", exc)
+
+    # 2. Fallback: gtk-launch
     desktop_map = {
         "zapzap": "com.rtosta.zapzap",
         "whatsapp": "com.rtosta.zapzap",
@@ -41,9 +96,10 @@ def _focus_desktop_app(app_name: str) -> bool:
     target = desktop_map.get(name, name)
     try:
         res = subprocess.run(["gtk-launch", target], capture_output=True, timeout=5)
+        time.sleep(0.3)
         return res.returncode == 0
     except Exception as exc:
-        logger.warning("focus_app failed: %s", exc)
+        logger.warning("focus_app fallback failed: %s", exc)
         return False
 
 
@@ -169,7 +225,8 @@ class GuiAutomationTool(BaseTool):
             name=_TOOL_NAME,
             description=(
                 "Simulate native keyboard, mouse and desktop app interaction on Linux/Wayland. Actions: "
-                "'send_desktop_message' (brings app like 'zapzap'/'whatsapp' to front and types text + Enter to send it), "
+                "'whatsapp_open_chat' (ONLY opens and switches to the specified contact's chat in WhatsApp/ZapZap without sending any message; takes 'contact'), "
+                "'send_desktop_message' (brings app like 'zapzap' to front, optionally switches to 'contact' first, and types text + Enter to send it; takes 'text', optional 'contact'), "
                 "'focus_app' (brings app to foreground using 'app', e.g. 'zapzap', 'chrome', 'telegram'), "
                 "'type_text' (types literal string into active window, optional 'press_enter': true), "
                 "'hotkey' (presses key combination, e.g. 'ctrl+c', 'alt+tab', 'super', 'enter', 'ctrl+alt+t'), "
@@ -182,8 +239,12 @@ class GuiAutomationTool(BaseTool):
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["send_desktop_message", "focus_app", "type_text", "hotkey", "click", "move_mouse", "scroll"],
+                        "enum": ["whatsapp_open_chat", "send_desktop_message", "focus_app", "type_text", "hotkey", "click", "move_mouse", "scroll"],
                         "description": "Action to perform.",
+                    },
+                    "contact": {
+                        "type": "string",
+                        "description": "Contact or group name to open or send message to in WhatsApp/ZapZap (e.g. 'Andres Rodriguez', 'My Blood Flower').",
                     },
                     "app": {
                         "type": "string",
@@ -240,7 +301,9 @@ class GuiAutomationTool(BaseTool):
             return ToolResult(tool_name=_TOOL_NAME, content="Falta parámetro 'action'.", success=False)
 
         try:
-            if action == "send_desktop_message":
+            if action == "whatsapp_open_chat":
+                return self._whatsapp_open_chat(params)
+            elif action == "send_desktop_message":
                 return self._send_desktop_message(params)
             elif action == "focus_app":
                 return self._focus_app(params)
@@ -260,6 +323,90 @@ class GuiAutomationTool(BaseTool):
             logger.exception("GUI automation error")
             return ToolResult(tool_name=_TOOL_NAME, content=f"Error en automatización GUI: {exc}", success=False)
 
+    def _whatsapp_open_chat(self, params: Dict[str, Any]) -> ToolResult:
+        contact = (params.get("contact", "") or params.get("text", "") or params.get("name", "")).strip()
+        if not contact:
+            return ToolResult(tool_name=_TOOL_NAME, content="Falta el parámetro 'contact' con el nombre del contacto o grupo.", success=False)
+
+        _focus_desktop_app("zapzap")
+
+        char_lookup = {
+            "a": ecodes.KEY_A, "b": ecodes.KEY_B, "c": ecodes.KEY_C, "d": ecodes.KEY_D,
+            "e": ecodes.KEY_E, "f": ecodes.KEY_F, "g": ecodes.KEY_G, "h": ecodes.KEY_H,
+            "i": ecodes.KEY_I, "j": ecodes.KEY_J, "k": ecodes.KEY_K, "l": ecodes.KEY_L,
+            "m": ecodes.KEY_M, "n": ecodes.KEY_N, "o": ecodes.KEY_O, "p": ecodes.KEY_P,
+            "q": ecodes.KEY_Q, "r": ecodes.KEY_R, "s": ecodes.KEY_S, "t": ecodes.KEY_T,
+            "u": ecodes.KEY_U, "v": ecodes.KEY_V, "w": ecodes.KEY_W, "x": ecodes.KEY_X,
+            "y": ecodes.KEY_Y, "z": ecodes.KEY_Z, " ": ecodes.KEY_SPACE,
+            "0": ecodes.KEY_0, "1": ecodes.KEY_1, "2": ecodes.KEY_2, "3": ecodes.KEY_3,
+            "4": ecodes.KEY_4, "5": ecodes.KEY_5, "6": ecodes.KEY_6, "7": ecodes.KEY_7,
+            "8": ecodes.KEY_8, "9": ecodes.KEY_9,
+        }
+
+        all_keys = list(char_lookup.values()) + [ecodes.KEY_LEFTALT, ecodes.KEY_BACKSPACE, ecodes.KEY_ESC, ecodes.KEY_ENTER]
+        ui = UInput({ecodes.EV_KEY: all_keys}, name="Jarvis-WA-Nav")
+        time.sleep(0.08)
+        try:
+            # 1. Clear any active chat / modal focus
+            ui.write(ecodes.EV_KEY, ecodes.KEY_ESC, 1)
+            ui.syn()
+            time.sleep(0.02)
+            ui.write(ecodes.EV_KEY, ecodes.KEY_ESC, 0)
+            ui.syn()
+            time.sleep(0.2)
+
+            # 2. Trigger Alt + K (WhatsApp Web Command Palette / Quick Switcher)
+            ui.write(ecodes.EV_KEY, ecodes.KEY_LEFTALT, 1)
+            ui.syn()
+            time.sleep(0.02)
+            ui.write(ecodes.EV_KEY, ecodes.KEY_K, 1)
+            ui.syn()
+            time.sleep(0.04)
+            ui.write(ecodes.EV_KEY, ecodes.KEY_K, 0)
+            ui.syn()
+            time.sleep(0.02)
+            ui.write(ecodes.EV_KEY, ecodes.KEY_LEFTALT, 0)
+            ui.syn()
+            time.sleep(0.35)
+
+            # 3. Backspace to clear accidental 'k' in search box
+            ui.write(ecodes.EV_KEY, ecodes.KEY_BACKSPACE, 1)
+            ui.syn()
+            time.sleep(0.02)
+            ui.write(ecodes.EV_KEY, ecodes.KEY_BACKSPACE, 0)
+            ui.syn()
+            time.sleep(0.05)
+
+            # 4. Type normalized contact name into search input
+            normalized = unicodedata.normalize("NFKD", contact).encode("ASCII", "ignore").decode("ASCII").lower()
+            for ch in normalized:
+                if ch in char_lookup:
+                    kc = char_lookup[ch]
+                    ui.write(ecodes.EV_KEY, kc, 1)
+                    ui.syn()
+                    time.sleep(0.02)
+                    ui.write(ecodes.EV_KEY, kc, 0)
+                    ui.syn()
+                    time.sleep(0.02)
+
+            time.sleep(0.5)
+
+            # 5. Enter to open first matching result
+            ui.write(ecodes.EV_KEY, ecodes.KEY_ENTER, 1)
+            ui.syn()
+            time.sleep(0.04)
+            ui.write(ecodes.EV_KEY, ecodes.KEY_ENTER, 0)
+            ui.syn()
+            time.sleep(0.5)
+
+            return ToolResult(
+                tool_name=_TOOL_NAME,
+                content=f"💬 Chat de '{contact}' abierto con éxito en ZapZap (WhatsApp). No se ha enviado ningún mensaje.",
+                success=True,
+            )
+        finally:
+            ui.close()
+
     def _focus_app(self, params: Dict[str, Any]) -> ToolResult:
         app = params.get("app", "").strip()
         if not app:
@@ -273,17 +420,27 @@ class GuiAutomationTool(BaseTool):
     def _send_desktop_message(self, params: Dict[str, Any]) -> ToolResult:
         app = params.get("app", "zapzap").strip() or "zapzap"
         text = params.get("text", "").strip()
+        contact = params.get("contact", "").strip()
+
         if not text:
             return ToolResult(tool_name=_TOOL_NAME, content="'text' es requerido para enviar mensaje.", success=False)
 
-        _focus_desktop_app(app)
-        time.sleep(0.6)  # Allow window manager to switch focus
+        # If a specific contact was targeted in WhatsApp, open their chat first
+        if contact and app in ("zapzap", "whatsapp"):
+            open_res = self._whatsapp_open_chat({"contact": contact})
+            if not open_res.success:
+                return open_res
+            time.sleep(0.4)
+        else:
+            _focus_desktop_app(app)
+            time.sleep(0.5)
 
         type_res = self._type_text({"text": text, "press_enter": True})
         if type_res.success:
+            dest = f"a '{contact}' en {app}" if contact else f"en {app} al chat activo"
             return ToolResult(
                 tool_name=_TOOL_NAME,
-                content=f"💬 Mensaje enviado en {app} al chat activo: \"{text}\"",
+                content=f'💬 Mensaje enviado {dest}: "{text}"',
                 success=True,
             )
         return type_res
