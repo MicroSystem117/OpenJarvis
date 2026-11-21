@@ -64,9 +64,22 @@ def synthesize_speech(
     output_path: str,
     voice: str = _DEFAULT_VOICE,
 ) -> bool:
-    """Synchronous wrapper for synthesize_speech_async."""
+    """Synchronous wrapper for synthesize_speech_async safe for active event loops."""
     try:
-        return asyncio.run(synthesize_speech_async(text, output_path, voice))
+        loop = None
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+
+        if loop is not None and loop.is_running():
+            import concurrent.futures
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(asyncio.run, synthesize_speech_async(text, output_path, voice))
+                return future.result(timeout=25.0)
+        else:
+            return asyncio.run(synthesize_speech_async(text, output_path, voice))
     except Exception as exc:
         logger.warning("Synchronous Edge TTS error: %s", exc)
         return False
