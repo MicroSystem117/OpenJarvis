@@ -41,14 +41,15 @@ def _focus_desktop_app(app_name: str) -> bool:
     # 1. Primary: KWin D-Bus scripting to bypass Wayland Focus Stealing Prevention
     try:
         script = f"""
-        var clients = workspace.windowList();
-        for (var i = 0; i < clients.length; i++) {{
-            var c = clients[i];
-            var cap = c.caption ? c.caption.toLowerCase() : "";
-            var rc = c.resourceClass ? c.resourceClass.toLowerCase() : "";
+        var windows = workspace.windowList();
+        for (var i = 0; i < windows.length; i++) {{
+            var w = windows[i];
+            var cap = w.caption ? w.caption.toLowerCase() : "";
+            var rc = w.resourceClass ? w.resourceClass.toLowerCase() : "";
             if (cap.indexOf("{target_query}") !== -1 || rc.indexOf("{target_query}") !== -1) {{
-                c.minimized = false;
-                workspace.activeWindow = c;
+                w.minimized = false;
+                workspace.activeWindow = w;
+                workspace.raiseWindow(w);
                 break;
             }}
         }}
@@ -57,13 +58,8 @@ def _focus_desktop_app(app_name: str) -> bool:
         with open(script_file, "w") as f:
             f.write(script)
 
-        plugin_name = f"focus_{target_query}"
-        subprocess.run(
-            ["qdbus6", "org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.unloadScript", plugin_name],
-            capture_output=True,
-            timeout=3,
-        )
-        time.sleep(0.04)
+        # Unique plugin name avoids KWin -1 duplicate name cache collision
+        plugin_name = f"focus_{target_query}_{int(time.time() * 1000)}"
         load_res = subprocess.run(
             ["qdbus6", "org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.loadScript", script_file, plugin_name],
             capture_output=True,
@@ -77,7 +73,12 @@ def _focus_desktop_app(app_name: str) -> bool:
                 capture_output=True,
                 timeout=3,
             )
-            time.sleep(0.35)
+            subprocess.run(
+                ["qdbus6", "org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.unloadScript", plugin_name],
+                capture_output=True,
+                timeout=2,
+            )
+            time.sleep(0.4)
             return True
     except Exception as exc:
         logger.debug("KWin script focus failed: %s", exc)

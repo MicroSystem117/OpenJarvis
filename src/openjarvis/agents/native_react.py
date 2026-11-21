@@ -310,7 +310,13 @@ class NativeReActAgent(ToolUsingAgent):
                 )
 
             # Anti-hallucination check for fake action claims without tool execution
-            fake_pattern = r"\b(ha sido enviado|he enviado|mensaje enviado|se envi[oó]|se ha enviado|captura tomada|he tomado la captura|captura enviada|evento creado|evento agendado|tarea creada|he creado la tarea|archivo modificado|correo enviado|chat abierto|he abierto el chat|conversaci[oó]n abierta)\b"
+            fake_pattern = (
+                r"(ha sido enviado|he enviado|mensaje enviado|se envi[oó]|se ha enviado|captura tomada|"
+                r"he tomado la captura|captura enviada|evento creado|evento agendado|tarea creada|"
+                r"he creado la tarea|archivo modificado|correo enviado|chat\s+.*\babierto\b|"
+                r"abierto\s+.*\bchat\b|abierto\s+y\s+enfocado|en primer plano|tienes\s+.*\bprimer plano\b|"
+                r"listo.*enviado|listo.*abierto)"
+            )
             if not all_tool_results and turns < (self._max_turns or 10) - 1:
                 target_check = parsed.get("final_answer") or content
                 m_claim = re.search(fake_pattern, target_check, re.IGNORECASE)
@@ -322,9 +328,10 @@ class NativeReActAgent(ToolUsingAgent):
                             role=Role.USER,
                             content=(
                                 f"ERROR DE VERACIDAD: Afirmaste '{m_claim.group(0)}', pero NO ejecutaste ninguna herramienta en este turno. "
-                                "Tienes terminantemente prohibido fingir que enviaste un mensaje, abriste un chat, tomaste una captura o ejecutaste una acción externa sin haber invocado la herramienta correspondiente. "
+                                "Tienes terminantemente prohibido fingir que enviaste un mensaje, abriste un chat, enfocaste una app, tomaste una captura o ejecutaste una acción externa sin haber invocado la herramienta correspondiente. "
                                 "Si requieres abrir un chat de WhatsApp/ZapZap, invoca gui_automation con action='whatsapp_open_chat' y contact='...'. "
-                                "Si requieres enviar un mensaje, invoca gui_automation con action='send_desktop_message'. "
+                                "Si requieres enfocar una app como ZapZap, invoca gui_automation con action='focus_app' y app='zapzap'. "
+                                "Si requieres enviar un mensaje, invoca gui_automation con action='send_desktop_message' con text='...' y contact='...'. "
                                 "Si no tienes una herramienta para hacerlo directamente, responde con honestidad total explicando tus límites."
                             ),
                         )
