@@ -287,6 +287,7 @@ class JarvisSystem:
                         cm.conversation_id,
                         reply,
                         conversation_id=getattr(cm, "message_id", ""),
+                        metadata=getattr(cm, "metadata", None),
                     )
                 except Exception:
                     logger.exception("Channel send error")

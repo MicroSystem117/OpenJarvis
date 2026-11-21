@@ -222,6 +222,30 @@ class TelegramChannel(BaseChannel):
                             resp.text,
                         )
                         return False
+            # If inbound message was voice, synthesize and send voice reply
+            if metadata and metadata.get("is_voice"):
+                try:
+                    import tempfile
+                    from openjarvis.speech.edge_tts_helper import synthesize_speech
+
+                    with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tf:
+                        temp_path = tf.name
+
+                    if synthesize_speech(content, temp_path):
+                        voice_url = f"https://api.telegram.org/bot{self._token}/sendVoice"
+                        with open(temp_path, "rb") as vf:
+                            v_files = {"voice": ("voice.ogg", vf, "audio/ogg")}
+                            v_data = {"chat_id": chat_id}
+                            if reply_to:
+                                v_data["reply_to_message_id"] = reply_to
+                            httpx.post(voice_url, data=v_data, files=v_files, timeout=25.0)
+                    try:
+                        os.unlink(temp_path)
+                    except Exception:
+                        pass
+                except Exception as exc:
+                    logger.debug("Voice reply synthesis/send error: %s", exc)
+
             self._publish_sent(channel, content, conversation_id)
             return True
         except Exception:
@@ -387,12 +411,44 @@ class TelegramChannel(BaseChannel):
                 msg = update.message
                 if msg is None:
                     return
+
+                is_voice_input = False
+                text_content = msg.text or ""
+
+                if msg.voice or msg.audio:
+                    try:
+                        # Indicate recording voice action
+                        try:
+                            await context.bot.send_chat_action(chat_id=msg.chat_id, action="record_voice")
+                        except Exception:
+                            pass
+
+                        media_obj = msg.voice or msg.audio
+                        file_obj = await media_obj.get_file()
+                        raw_bytes = await file_obj.download_as_bytearray()
+
+                        from openjarvis.speech.gemini_stt import transcribe_audio_bytes
+
+                        mime_type = getattr(media_obj, "mime_type", "audio/ogg") or "audio/ogg"
+                        transcribed = transcribe_audio_bytes(bytes(raw_bytes), mime_type=mime_type)
+
+                        if transcribed:
+                            text_content = transcribed
+                            is_voice_input = True
+                            logger.info("Transcribed Telegram voice note: %s", transcribed[:60])
+                        else:
+                            text_content = "(Nota de voz recibida pero no se pudo transcribir)"
+                    except Exception as exc:
+                        logger.exception("Error processing Telegram voice note: %s", exc)
+                        text_content = "(Error al procesar nota de voz)"
+
                 cm = ChannelMessage(
                     channel="telegram",
                     sender=str(msg.from_user.id) if msg.from_user else "",
-                    content=msg.text or "",
+                    content=text_content,
                     message_id=str(msg.message_id),
                     conversation_id=str(msg.chat.id),
+                    metadata={"is_voice": is_voice_input},
                 )
                 # Enforce allow-list when configured
                 if self._allowed_chat_ids:
@@ -423,7 +479,7 @@ class TelegramChannel(BaseChannel):
                         },
                     )
 
-            app.add_handler(MessageHandler(filters.TEXT, _handle_msg))
+            app.add_handler(MessageHandler(filters.TEXT | filters.VOICE | filters.AUDIO, _handle_msg))
             loop.run_until_complete(self._run_polling_lifecycle(app, async_stop_event))
         except Exception:
             logger.debug("Telegram poll loop error", exc_info=True)
