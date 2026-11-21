@@ -72,13 +72,13 @@ class VoiceSettingsTool(BaseTool):
                     },
                     "rate": {
                         "type": "string",
-                        "description": "Speech speed rate (e.g. '-2%', '+0%', '+4%').",
-                        "default": "-2%",
+                        "description": "Speech speed rate (e.g. '+1%', '+0%', '-2%').",
+                        "default": "+1%",
                     },
                     "pitch": {
                         "type": "string",
-                        "description": "Speech pitch modulation (e.g. '-4Hz', '-2Hz', '+0Hz').",
-                        "default": "-4Hz",
+                        "description": "Speech pitch modulation (e.g. '+0Hz', '-2Hz', '-4Hz').",
+                        "default": "+0Hz",
                     },
                 },
                 "required": ["action"],
@@ -128,8 +128,8 @@ class VoiceSettingsTool(BaseTool):
             return ToolResult(tool_name=_TOOL_NAME, content="'voice' is required for set_voice.", success=False)
 
         target_voice = _VOICE_ALIASES.get(v_input, params.get("voice", "").strip())
-        rate = params.get("rate", "-2%").strip()
-        pitch = params.get("pitch", "-4Hz" if "alvaro" in target_voice.lower() else "+0Hz").strip()
+        rate = params.get("rate", "+1%").strip()
+        pitch = params.get("pitch", "+0Hz").strip()
 
         # Update config.toml
         cfg_path = get_config_dir() / "config.toml"

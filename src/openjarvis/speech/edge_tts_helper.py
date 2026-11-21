@@ -10,9 +10,9 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_VOICE = "es-ES-AlvaroNeural"  # Refined Jarvis baritone voice
-_DEFAULT_RATE = "-2%"  # Steady, dignified cadence
-_DEFAULT_PITCH = "-4Hz"  # Deep, resonant AI butler tone
+_DEFAULT_VOICE = "es-ES-AlvaroNeural"  # Refined Alvaro voice in 100% native acoustic profile
+_DEFAULT_RATE = "+1%"  # Natural conversational human cadence
+_DEFAULT_PITCH = "+0Hz"  # Zero DSP artifacts, authentic vocal tract harmonics
 
 
 def _resolve_voice_config() -> tuple[str, str, str]:
