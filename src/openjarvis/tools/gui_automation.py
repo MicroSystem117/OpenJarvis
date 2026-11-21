@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import time
 import unicodedata
+from pathlib import Path
 from typing import Any, Dict, List
 
 from openjarvis.core.registry import ToolRegistry
@@ -226,9 +228,12 @@ class GuiAutomationTool(BaseTool):
             name=_TOOL_NAME,
             description=(
                 "Simulate native keyboard, mouse and desktop app interaction on Linux/Wayland. Actions: "
+                "'ide_open_project' (opens a project folder/directory in Antigravity IDE and brings it to front; takes 'path', e.g. 'openjarvis', 'projects', '~/Projects/app'), "
+                "'ide_open_file' (opens a file at optional line in Antigravity IDE and brings it to front; takes 'path', optional 'line'), "
+                "'ide_chat' (brings Antigravity IDE to front and submits an AI prompt to its inline agent; takes 'prompt' or 'text'), "
                 "'whatsapp_open_chat' (ONLY opens and switches to the specified contact's chat in WhatsApp/ZapZap without sending any message; takes 'contact'), "
                 "'send_desktop_message' (brings app like 'zapzap' to front, optionally switches to 'contact' first, and types text + Enter to send it; takes 'text', optional 'contact'), "
-                "'focus_app' (brings app to foreground using 'app', e.g. 'zapzap', 'chrome', 'telegram'), "
+                "'focus_app' (brings app to foreground using 'app', e.g. 'zapzap', 'chrome', 'antigravity', 'telegram'), "
                 "'type_text' (types literal string into active window, optional 'press_enter': true), "
                 "'hotkey' (presses key combination, e.g. 'ctrl+c', 'alt+tab', 'super', 'enter', 'ctrl+alt+t'), "
                 "'click' (clicks mouse button: 'left', 'right', 'middle', 'double'), "
@@ -240,8 +245,20 @@ class GuiAutomationTool(BaseTool):
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["whatsapp_open_chat", "send_desktop_message", "focus_app", "type_text", "hotkey", "click", "move_mouse", "scroll"],
+                        "enum": ["ide_open_project", "ide_open_file", "ide_chat", "whatsapp_open_chat", "send_desktop_message", "focus_app", "type_text", "hotkey", "click", "move_mouse", "scroll"],
                         "description": "Action to perform.",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Project directory path or file path for 'ide_open_project' or 'ide_open_file'.",
+                    },
+                    "line": {
+                        "type": "integer",
+                        "description": "Line number for 'ide_open_file'.",
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "Instruction/prompt to send to the IDE AI assistant for 'ide_chat'.",
                     },
                     "contact": {
                         "type": "string",
@@ -249,7 +266,7 @@ class GuiAutomationTool(BaseTool):
                     },
                     "app": {
                         "type": "string",
-                        "description": "Application name for 'focus_app' or 'send_desktop_message' (e.g. 'zapzap', 'whatsapp', 'chrome').",
+                        "description": "Application name for 'focus_app' or 'send_desktop_message' (e.g. 'zapzap', 'whatsapp', 'chrome', 'antigravity').",
                     },
                     "text": {
                         "type": "string",
@@ -302,7 +319,13 @@ class GuiAutomationTool(BaseTool):
             return ToolResult(tool_name=_TOOL_NAME, content="Falta parámetro 'action'.", success=False)
 
         try:
-            if action == "whatsapp_open_chat":
+            if action == "ide_open_project":
+                return self._ide_open_project(params)
+            elif action == "ide_open_file":
+                return self._ide_open_file(params)
+            elif action == "ide_chat":
+                return self._ide_chat(params)
+            elif action == "whatsapp_open_chat":
                 return self._whatsapp_open_chat(params)
             elif action == "send_desktop_message":
                 return self._send_desktop_message(params)
@@ -323,6 +346,93 @@ class GuiAutomationTool(BaseTool):
         except Exception as exc:
             logger.exception("GUI automation error")
             return ToolResult(tool_name=_TOOL_NAME, content=f"Error en automatización GUI: {exc}", success=False)
+
+    def _ide_open_project(self, params: Dict[str, Any]) -> ToolResult:
+        p = (params.get("path") or params.get("text") or "").strip()
+        if not p:
+            return ToolResult(tool_name=_TOOL_NAME, content="Falta el parámetro 'path' con el nombre o ruta del proyecto.", success=False)
+
+        target: Optional[Path] = None
+        plow = p.lower()
+        if plow in ("openjarvis", "jarvis"):
+            target = Path("/home/microsystem/.openjarvis/src")
+        elif plow in ("projects", "proyectos"):
+            target = Path("/home/microsystem/Projects")
+        else:
+            exp = Path(os.path.expanduser(p))
+            if exp.exists():
+                target = exp
+            else:
+                cand1 = Path("/home/microsystem/Projects") / p
+                cand2 = Path("/home/microsystem") / p
+                if cand1.exists():
+                    target = cand1
+                elif cand2.exists():
+                    target = cand2
+
+        if not target or not target.exists():
+            return ToolResult(tool_name=_TOOL_NAME, content=f"No se encontró el directorio del proyecto para '{p}'.", success=False)
+
+        try:
+            subprocess.run(["antigravity-ide", "-r", str(target)], capture_output=True, timeout=8)
+            time.sleep(0.4)
+            _focus_desktop_app("antigravity")
+            return ToolResult(
+                tool_name=_TOOL_NAME,
+                content=f"💻 Proyecto '{target.name}' ({target}) abierto en Antigravity IDE y ventana traída al frente.",
+                success=True,
+            )
+        except Exception as exc:
+            return ToolResult(tool_name=_TOOL_NAME, content=f"Error abriendo proyecto en Antigravity IDE: {exc}", success=False)
+
+    def _ide_open_file(self, params: Dict[str, Any]) -> ToolResult:
+        fpath = (params.get("path") or params.get("file") or params.get("text") or "").strip()
+        if not fpath:
+            return ToolResult(tool_name=_TOOL_NAME, content="Falta el parámetro 'path' con la ruta del archivo.", success=False)
+
+        line = params.get("line")
+        exp = Path(os.path.expanduser(fpath))
+        if not exp.exists():
+            cand = Path("/home/microsystem/.openjarvis/src") / fpath
+            if cand.exists():
+                exp = cand
+
+        arg = f"{exp}:{line}" if line else str(exp)
+        try:
+            subprocess.run(["antigravity-ide", "-r", "-g", arg], capture_output=True, timeout=8)
+            time.sleep(0.4)
+            _focus_desktop_app("antigravity")
+            line_str = f" en la línea {line}" if line else ""
+            return ToolResult(
+                tool_name=_TOOL_NAME,
+                content=f"📄 Archivo '{exp.name}' abierto{line_str} en Antigravity IDE y ventana traída al frente.",
+                success=True,
+            )
+        except Exception as exc:
+            return ToolResult(tool_name=_TOOL_NAME, content=f"Error abriendo archivo en Antigravity IDE: {exc}", success=False)
+
+    def _ide_chat(self, params: Dict[str, Any]) -> ToolResult:
+        prompt = (params.get("prompt") or params.get("text") or params.get("message") or "").strip()
+        if not prompt:
+            return ToolResult(tool_name=_TOOL_NAME, content="Falta el parámetro 'prompt' con la instrucción para la IA.", success=False)
+
+        _focus_desktop_app("antigravity")
+        time.sleep(0.4)
+
+        # Trigger inline code/agent prompt with Ctrl + L
+        hk_res = self._hotkey({"keys": "ctrl+l"})
+        if not hk_res.success:
+            return hk_res
+        time.sleep(0.35)
+
+        type_res = self._type_text({"text": prompt, "press_enter": True})
+        if type_res.success:
+            return ToolResult(
+                tool_name=_TOOL_NAME,
+                content=f"🤖 Instrucción enviada a la IA de Antigravity IDE: \"{prompt}\"",
+                success=True,
+            )
+        return type_res
 
     def _whatsapp_open_chat(self, params: Dict[str, Any]) -> ToolResult:
         contact = (params.get("contact", "") or params.get("text", "") or params.get("name", "")).strip()

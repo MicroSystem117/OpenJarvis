@@ -315,7 +315,7 @@ class NativeReActAgent(ToolUsingAgent):
                 r"he tomado la captura|captura enviada|evento creado|evento agendado|tarea creada|"
                 r"he creado la tarea|archivo modificado|correo enviado|chat\s+.*\babierto\b|"
                 r"abierto\s+.*\bchat\b|abierto\s+y\s+enfocado|en primer plano|tienes\s+.*\bprimer plano\b|"
-                r"listo.*enviado|listo.*abierto)"
+                r"proyecto\s+.*\babierto\b|carpeta\s+.*\babierta\b|listo.*enviado|listo.*abierto)"
             )
             if not all_tool_results and turns < (self._max_turns or 10) - 1:
                 target_check = parsed.get("final_answer") or content
