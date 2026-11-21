@@ -30,8 +30,13 @@ def _capture_screen_spectacle(output_path: str, mode: str = "fullscreen") -> boo
         env["WAYLAND_DISPLAY"] = "wayland-1"
     if "DISPLAY" not in env:
         env["DISPLAY"] = ":0"
+    if "XDG_RUNTIME_DIR" not in env:
+        env["XDG_RUNTIME_DIR"] = "/run/user/1000"
+    if "DBUS_SESSION_BUS_ADDRESS" not in env:
+        env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=/run/user/1000/bus"
 
-    cmd = ["spectacle", "-b"]
+    # -b: background, -n: nonotify (prevents waiting for notification popup), -d 0: no delay
+    cmd = ["spectacle", "-b", "-n", "-d", "0"]
     if mode == "active":
         cmd.append("-a")
     elif mode == "current":
@@ -42,7 +47,7 @@ def _capture_screen_spectacle(output_path: str, mode: str = "fullscreen") -> boo
     cmd.extend(["-o", output_path])
 
     try:
-        res = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=10)
+        res = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=15)
         return res.returncode == 0 and Path(output_path).is_file() and Path(output_path).stat().st_size > 0
     except Exception as exc:
         logger.warning("Spectacle capture failed: %s", exc)
