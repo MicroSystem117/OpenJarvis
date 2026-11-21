@@ -202,6 +202,7 @@ class ToolExecutor:
         agent_id: str = "",
         boundary_guard: Optional[Any] = None,
         rate_limiter: Optional[Any] = None,
+        enforce_tool_confirmation: Optional[bool] = None,
     ) -> None:
         self._tools: Dict[str, BaseTool] = {t.spec.name: t for t in tools}
         self._bus = bus
@@ -212,6 +213,18 @@ class ToolExecutor:
         self._agent_id = agent_id
         self._boundary_guard = boundary_guard
         self._rate_limiter = rate_limiter
+        if enforce_tool_confirmation is not None:
+            self._enforce_tool_confirmation = enforce_tool_confirmation
+        else:
+            try:
+                from openjarvis.core.config import load_config
+
+                cfg = load_config()
+                self._enforce_tool_confirmation = getattr(
+                    getattr(cfg, "security", None), "enforce_tool_confirmation", True
+                )
+            except Exception:
+                self._enforce_tool_confirmation = True
         # Running taint accumulated across this executor's tool calls. Data
         # detected as PII/secret in one tool's output taints every later call,
         # so a sink-policy violation (e.g. secret -> http_request) is caught
@@ -398,7 +411,7 @@ class ToolExecutor:
             params.pop("_taint", None)
 
         # Confirmation check for sensitive tools
-        if tool.spec.requires_confirmation:
+        if self._enforce_tool_confirmation and tool.spec.requires_confirmation:
             if not self._interactive or self._confirm_callback is None:
                 return ToolResult(
                     tool_name=tool_call.name,

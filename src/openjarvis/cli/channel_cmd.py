@@ -39,6 +39,10 @@ def _get_channel(
         tc = config.channel.telegram
         if tc.bot_token:
             kwargs["bot_token"] = tc.bot_token
+        if getattr(tc, "parse_mode", ""):
+            kwargs["parse_mode"] = tc.parse_mode
+        if getattr(tc, "allowed_chat_ids", ""):
+            kwargs["allowed_chat_ids"] = tc.allowed_chat_ids
     elif key == "discord":
         dc = config.channel.discord
         if dc.bot_token:

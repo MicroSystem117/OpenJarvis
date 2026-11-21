@@ -50,6 +50,14 @@ _BUILTIN_TOOL_MODULES = (
     "browser",
     "browser_axtree",
     "proactive_tools",
+    "google_calendar",
+    "google_gmail",
+    "google_tasks",
+    "google_drive",
+    "system_sentinel",
+    "reminders",
+    "daily_digest",
+    "web_reader",
 )
 
 for _name in _BUILTIN_TOOL_MODULES:

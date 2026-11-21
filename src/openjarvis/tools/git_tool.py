@@ -396,4 +396,88 @@ class GitLogTool(BaseTool):
         return _run_git(cmd, cwd=repo_path)
 
 
-__all__ = ["GitStatusTool", "GitDiffTool", "GitCommitTool", "GitLogTool"]
+@ToolRegistry.register("git_pull")
+class GitPullTool(BaseTool):
+    """Git pull tool — fetch and merge from remote repository."""
+
+    tool_id = "git_pull"
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="git_pull",
+            description="Pull latest commits from remote git repository.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "repo_path": {
+                        "type": "string",
+                        "description": "Path to the git repository (default '.').",
+                    },
+                    "remote": {
+                        "type": "string",
+                        "description": "Remote name (default 'origin').",
+                    },
+                    "branch": {
+                        "type": "string",
+                        "description": "Branch name to pull (e.g. 'main').",
+                    },
+                },
+            },
+            category="vcs",
+            requires_confirmation=False,
+        )
+
+    def execute(self, **params: Any) -> ToolResult:
+        repo_path = params.get("repo_path", ".")
+        remote = params.get("remote", "origin")
+        branch = params.get("branch")
+        cmd = ["git", "pull", remote]
+        if branch:
+            cmd.append(branch)
+        return _run_git(cmd, cwd=repo_path)
+
+
+@ToolRegistry.register("git_push")
+class GitPushTool(BaseTool):
+    """Git push tool — push local commits to remote repository."""
+
+    tool_id = "git_push"
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="git_push",
+            description="Push committed changes to remote repository.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "repo_path": {
+                        "type": "string",
+                        "description": "Path to the git repository (default '.').",
+                    },
+                    "remote": {
+                        "type": "string",
+                        "description": "Remote name (default 'origin').",
+                    },
+                    "branch": {
+                        "type": "string",
+                        "description": "Branch name to push (e.g. 'main').",
+                    },
+                },
+            },
+            category="vcs",
+            requires_confirmation=False,
+        )
+
+    def execute(self, **params: Any) -> ToolResult:
+        repo_path = params.get("repo_path", ".")
+        remote = params.get("remote", "origin")
+        branch = params.get("branch")
+        cmd = ["git", "push", remote]
+        if branch:
+            cmd.append(branch)
+        return _run_git(cmd, cwd=repo_path)
+
+
+__all__ = ["GitStatusTool", "GitDiffTool", "GitCommitTool", "GitLogTool", "GitPullTool", "GitPushTool"]

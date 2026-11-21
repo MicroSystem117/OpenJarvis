@@ -475,7 +475,21 @@ class DigestCollectTool(BaseTool):
         # Ensure connectors are registered
         import openjarvis.connectors  # noqa: F401
 
-        sources: List[str] = params.get("sources", [])
+        raw_sources: List[str] = params.get("sources", [])
+        _ALIASES = {
+            "tasks": "google_tasks",
+            "task": "google_tasks",
+            "gtasks": "google_tasks",
+            "calendar": "gcalendar",
+            "google_calendar": "gcalendar",
+            "drive": "gdrive",
+            "google_drive": "gdrive",
+            "contacts": "gcontacts",
+            "google_contacts": "gcontacts",
+            "mail": "gmail",
+            "email": "gmail",
+        }
+        sources: List[str] = [_ALIASES.get(str(s).lower(), str(s)) for s in raw_sources]
         hours_back: float = params.get("hours_back", 24)
         unacted_only: bool = bool(params.get("unacted_only", False))
         seen_ids: set = set(params.get("seen_ids", []))
@@ -505,7 +519,9 @@ class DigestCollectTool(BaseTool):
                 docs: List[Document] = []
 
                 sync_kwargs: Dict[str, Any] = {"since": since}
-                if unacted_only and source == "gmail":
+                if source == "google_tasks":
+                    sync_kwargs = {}
+                elif unacted_only and source == "gmail":
                     sync_kwargs["query_extra"] = "is:unread"
 
                 for d in connector.sync(**sync_kwargs):

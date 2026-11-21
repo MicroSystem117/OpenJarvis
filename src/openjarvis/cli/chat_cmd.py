@@ -282,12 +282,14 @@ def chat(
                     kwargs["max_turns"] = config.agent.max_turns
 
                     def _confirm(prompt: str) -> bool:
+                        if not getattr(config.security, "enforce_tool_confirmation", True):
+                            return True
                         console.print(
-                            f"[yellow]Confirm:[/yellow] {prompt} [y/N] ",
+                            f"[yellow]Confirm:[/yellow] {prompt} [y/s/N] ",
                             end="",
                         )
                         ans = input().strip().lower()
-                        return ans in ("y", "yes")
+                        return ans in ("y", "yes", "s", "si", "sí")
 
                     kwargs["interactive"] = True
                     kwargs["confirm_callback"] = _confirm

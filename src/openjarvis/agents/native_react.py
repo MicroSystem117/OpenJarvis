@@ -22,7 +22,7 @@ from openjarvis.engine._stubs import InferenceEngine
 from openjarvis.tools._stubs import BaseTool, build_tool_descriptions
 
 REACT_SYSTEM_PROMPT = """\
-You are a ReAct agent. For each step, respond with exactly one of:
+You are Jarvis, a precise and truthful ReAct agent. For each step, respond with exactly one of:
 
 1. To think and act:
 Thought: <your reasoning>
@@ -32,6 +32,11 @@ Action Input: <json arguments>
 2. To give a final answer:
 Thought: <your reasoning>
 Final Answer: <your answer>
+
+# Critical Grounding & Anti-Hallucination Directives
+- NEVER claim or pretend that an external action was completed (e.g. creating/updating a calendar event, creating a task, sending an email, modifying a file, or running a system command) unless you actually invoked the corresponding tool and observed a successful result in the Observation during this turn.
+- If you do not have a tool to perform a requested real-world action, or if a tool is missing or unauthorized, state the limitation or error truthfully in your Final Answer. Never invent fake success confirmations, simulated results, or imaginary links.
+- Your capabilities are strictly bounded by the tools listed below. If an action cannot be performed with the available tools, tell the user immediately.
 
 # Using Skills
 
@@ -153,6 +158,7 @@ class NativeReActAgent(ToolUsingAgent):
         capability_policy: Optional[Any] = None,
         agent_id: Optional[str] = None,
         rate_limiter: Optional[Any] = None,
+        prompt_builder: Optional[Any] = None,
     ) -> None:
         super().__init__(
             engine,
@@ -168,6 +174,7 @@ class NativeReActAgent(ToolUsingAgent):
             capability_policy=capability_policy,
             agent_id=agent_id,
             rate_limiter=rate_limiter,
+            prompt_builder=prompt_builder,
         )
 
     def _parse_response(self, text: str) -> dict:
@@ -257,6 +264,7 @@ class NativeReActAgent(ToolUsingAgent):
             if skill_examples_block:
                 system_prompt = system_prompt + "\n\n" + skill_examples_block
 
+        system_prompt = self._apply_persona(system_prompt)
         messages = self._build_messages(input, context, system_prompt=system_prompt)
 
         # Inject few-shot exemplars before the user input
@@ -305,8 +313,14 @@ class NativeReActAgent(ToolUsingAgent):
             if parsed["final_answer"]:
                 self._emit_turn_end(turns=turns)
                 msg_dicts = [_message_to_dict(m) for m in messages]
+                clean_ans = re.sub(
+                    r"^(?:Final Answer|Respuesta Final):\s*",
+                    "",
+                    parsed["final_answer"],
+                    flags=re.IGNORECASE,
+                ).strip()
                 return AgentResult(
-                    content=parsed["final_answer"],
+                    content=clean_ans or parsed["final_answer"],
                     tool_results=all_tool_results,
                     turns=turns,
                     metadata={**total_usage, "messages": msg_dicts},
@@ -316,8 +330,15 @@ class NativeReActAgent(ToolUsingAgent):
             if not parsed["action"]:
                 self._emit_turn_end(turns=turns)
                 msg_dicts = [_message_to_dict(m) for m in messages]
+                clean = parsed.get("thought") or content
+                clean = re.sub(
+                    r"^(?:Thought|Pensamiento):\s*",
+                    "",
+                    clean,
+                    flags=re.IGNORECASE,
+                ).strip()
                 return AgentResult(
-                    content=content,
+                    content=clean or content,
                     tool_results=all_tool_results,
                     turns=turns,
                     metadata={**total_usage, "messages": msg_dicts},

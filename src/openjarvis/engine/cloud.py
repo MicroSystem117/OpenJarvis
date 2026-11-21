@@ -45,6 +45,7 @@ PRICING: Dict[str, tuple[float, float]] = {
     "gemini-3-pro": (2.00, 12.00),
     "gemini-3-flash": (0.50, 3.00),
     "gemini-3.1-pro-preview": (2.50, 15.00),
+    "gemini-3.1-flash-lite": (0.30, 2.50),
     "gemini-3.1-flash-lite-preview": (0.30, 2.50),
     "gemini-3-flash-preview": (0.50, 3.00),
     "claude-haiku-4-5-20251001": (1.00, 5.00),
@@ -105,6 +106,7 @@ _GOOGLE_MODELS = [
     "gemini-3-pro",
     "gemini-3-flash",
     "gemini-3.1-pro-preview",
+    "gemini-3.1-flash-lite",
     "gemini-3.1-flash-lite-preview",
     "gemini-3-flash-preview",
 ]
@@ -967,11 +969,32 @@ class CloudEngine(InferenceEngine):
                     config.response_schema = response_format.schema
 
         t0 = time.monotonic()
-        resp = self._google_client.models.generate_content(
-            model=model,
-            contents=contents,
-            config=config,
-        )
+        max_retries = 3
+        backoff = 2.0
+        resp = None
+        for attempt in range(max_retries):
+            try:
+                resp = self._google_client.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    config=config,
+                )
+                break
+            except Exception as exc:
+                exc_str = str(exc)
+                is_transient = "503" in exc_str or "UNAVAILABLE" in exc_str or "429" in exc_str or "RESOURCE_EXHAUSTED" in exc_str
+                if is_transient and attempt < max_retries - 1:
+                    logger.warning(
+                        "Google API transient error (attempt %d/%d): %s. Retrying in %.1fs...",
+                        attempt + 1,
+                        max_retries,
+                        exc,
+                        backoff,
+                    )
+                    time.sleep(backoff)
+                    backoff *= 2
+                else:
+                    raise
         elapsed = time.monotonic() - t0
 
         # Extract text and function_call parts from response
