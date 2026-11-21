@@ -59,6 +59,7 @@ _BUILTIN_TOOL_MODULES = (
     "daily_digest",
     "web_reader",
     "google_contacts",
+    "voice_settings",
 )
 
 for _name in _BUILTIN_TOOL_MODULES:
