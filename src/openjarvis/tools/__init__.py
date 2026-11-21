@@ -60,6 +60,8 @@ _BUILTIN_TOOL_MODULES = (
     "web_reader",
     "google_contacts",
     "voice_settings",
+    "screen_vision",
+    "gui_automation",
 )
 
 for _name in _BUILTIN_TOOL_MODULES:
