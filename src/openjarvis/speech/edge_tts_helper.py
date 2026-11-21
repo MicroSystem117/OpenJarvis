@@ -10,16 +10,18 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_VOICE = "es-ES-AlvaroNeural"  # Microsoft's flagship articulate Spanish male voice
-_DEFAULT_RATE = "+4%"  # Lively, natural conversational cadence
+_DEFAULT_VOICE = "es-ES-AlvaroNeural"  # Refined Jarvis baritone voice
+_DEFAULT_RATE = "-2%"  # Steady, dignified cadence
+_DEFAULT_PITCH = "-4Hz"  # Deep, resonant AI butler tone
 
 
-def _resolve_voice_and_rate() -> tuple[str, str]:
-    """Retrieve configured voice and speech rate from config or environment."""
+def _resolve_voice_config() -> tuple[str, str, str]:
+    """Retrieve configured voice, speech rate, and pitch from config or environment."""
     voice = os.environ.get("OPENJARVIS_TTS_VOICE", "")
     rate = os.environ.get("OPENJARVIS_TTS_RATE", "")
+    pitch = os.environ.get("OPENJARVIS_TTS_PITCH", "")
 
-    if not voice or not rate:
+    if not voice or not rate or not pitch:
         try:
             import tomllib
             from openjarvis.core.paths import get_config_dir
@@ -35,10 +37,20 @@ def _resolve_voice_and_rate() -> tuple[str, str]:
                         voice = sp["voice"]
                     if not rate and sp.get("voice_rate"):
                         rate = sp["voice_rate"]
+                    if not pitch and sp.get("voice_pitch"):
+                        pitch = sp["voice_pitch"]
+                    if not pitch and sp.get("pitch"):
+                        pitch = sp["pitch"]
         except Exception as exc:
             logger.debug("Error reading TTS config: %s", exc)
 
-    return voice or _DEFAULT_VOICE, rate or _DEFAULT_RATE
+    return voice or _DEFAULT_VOICE, rate or _DEFAULT_RATE, pitch or _DEFAULT_PITCH
+
+
+def _resolve_voice_and_rate() -> tuple[str, str]:
+    """Backwards compatibility wrapper returning (voice, rate)."""
+    v, r, _ = _resolve_voice_config()
+    return v, r
 
 
 def clean_text_for_speech(text: str, max_chars: int = 1400) -> str:
@@ -117,20 +129,27 @@ async def synthesize_speech_async(
     output_path: str,
     voice: str | None = None,
     rate: str | None = None,
+    pitch: str | None = None,
 ) -> bool:
     """Synthesize text to an audio file asynchronously."""
     try:
         import edge_tts
 
-        cfg_voice, cfg_rate = _resolve_voice_and_rate()
+        cfg_voice, cfg_rate, cfg_pitch = _resolve_voice_config()
         target_voice = voice or cfg_voice
         target_rate = rate or cfg_rate
+        target_pitch = pitch or cfg_pitch
 
         clean = clean_text_for_speech(text)
         if not clean:
             return False
 
-        communicate = edge_tts.Communicate(clean, target_voice, rate=target_rate)
+        communicate = edge_tts.Communicate(
+            clean,
+            target_voice,
+            rate=target_rate,
+            pitch=target_pitch,
+        )
         await communicate.save(output_path)
         return Path(output_path).is_file() and Path(output_path).stat().st_size > 0
     except Exception as exc:
@@ -143,6 +162,7 @@ def synthesize_speech(
     output_path: str,
     voice: str | None = None,
     rate: str | None = None,
+    pitch: str | None = None,
 ) -> bool:
     """Synchronous wrapper for synthesize_speech_async safe for active event loops."""
     try:
@@ -158,12 +178,12 @@ def synthesize_speech(
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 future = pool.submit(
                     asyncio.run,
-                    synthesize_speech_async(text, output_path, voice, rate),
+                    synthesize_speech_async(text, output_path, voice, rate, pitch),
                 )
                 return future.result(timeout=25.0)
         else:
             return asyncio.run(
-                synthesize_speech_async(text, output_path, voice, rate)
+                synthesize_speech_async(text, output_path, voice, rate, pitch)
             )
     except Exception as exc:
         logger.warning("Synchronous Edge TTS error: %s", exc)

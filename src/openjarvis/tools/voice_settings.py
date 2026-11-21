@@ -72,8 +72,13 @@ class VoiceSettingsTool(BaseTool):
                     },
                     "rate": {
                         "type": "string",
-                        "description": "Speech speed rate (e.g. '+4%', '+0%', '-2%').",
-                        "default": "+4%",
+                        "description": "Speech speed rate (e.g. '-2%', '+0%', '+4%').",
+                        "default": "-2%",
+                    },
+                    "pitch": {
+                        "type": "string",
+                        "description": "Speech pitch modulation (e.g. '-4Hz', '-2Hz', '+0Hz').",
+                        "default": "-4Hz",
                     },
                 },
                 "required": ["action"],
@@ -123,7 +128,8 @@ class VoiceSettingsTool(BaseTool):
             return ToolResult(tool_name=_TOOL_NAME, content="'voice' is required for set_voice.", success=False)
 
         target_voice = _VOICE_ALIASES.get(v_input, params.get("voice", "").strip())
-        rate = params.get("rate", "+4%").strip()
+        rate = params.get("rate", "-2%").strip()
+        pitch = params.get("pitch", "-4Hz" if "alvaro" in target_voice.lower() else "+0Hz").strip()
 
         # Update config.toml
         cfg_path = get_config_dir() / "config.toml"
@@ -133,10 +139,11 @@ class VoiceSettingsTool(BaseTool):
             if "[speech]" in content:
                 content = re.sub(r'voice\s*=\s*"[^"]*"', f'voice = "{target_voice}"', content)
                 content = re.sub(r'voice_rate\s*=\s*"[^"]*"', f'voice_rate = "{rate}"', content)
+                content = re.sub(r'voice_pitch\s*=\s*"[^"]*"', f'voice_pitch = "{pitch}"', content)
                 if f'voice = "{target_voice}"' not in content:
-                    content = content.replace("[speech]", f'[speech]\nvoice = "{target_voice}"\nvoice_rate = "{rate}"')
+                    content = content.replace("[speech]", f'[speech]\nvoice = "{target_voice}"\nvoice_rate = "{rate}"\nvoice_pitch = "{pitch}"')
             else:
-                content += f'\n\n[speech]\nvoice = "{target_voice}"\nvoice_rate = "{rate}"\n'
+                content += f'\n\n[speech]\nvoice = "{target_voice}"\nvoice_rate = "{rate}"\nvoice_pitch = "{pitch}"\n'
 
             cfg_path.write_text(content, encoding="utf-8")
 
@@ -145,11 +152,12 @@ class VoiceSettingsTool(BaseTool):
             content=(
                 f"✅ Voz actualizada con éxito:\n"
                 f"• **Voz:** `{target_voice}`\n"
-                f"• **Velocidad:** `{rate}`\n\n"
+                f"• **Velocidad:** `{rate}`\n"
+                f"• **Tono:** `{pitch}`\n\n"
                 f"Mis próximas notas de voz se generarán con este tono."
             ),
             success=True,
-            metadata={"voice": target_voice, "rate": rate},
+            metadata={"voice": target_voice, "rate": rate, "pitch": pitch},
         )
 
 
