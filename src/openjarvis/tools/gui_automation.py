@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 import time
+import unicodedata
 from typing import Any, Dict, List
 
 from openjarvis.core.registry import ToolRegistry
@@ -21,6 +23,28 @@ except ImportError:
     _EVDEV_AVAILABLE = False
     UInput = None
     ecodes = None
+
+
+def _focus_desktop_app(app_name: str) -> bool:
+    """Bring specified application window to the foreground under KDE/Wayland."""
+    name = app_name.lower().strip()
+    desktop_map = {
+        "zapzap": "com.rtosta.zapzap",
+        "whatsapp": "com.rtosta.zapzap",
+        "chrome": "google-chrome",
+        "browser": "google-chrome",
+        "firefox": "firefox",
+        "telegram": "org.telegram.desktop",
+        "code": "antigravity",
+        "ide": "antigravity",
+    }
+    target = desktop_map.get(name, name)
+    try:
+        res = subprocess.run(["gtk-launch", target], capture_output=True, timeout=5)
+        return res.returncode == 0
+    except Exception as exc:
+        logger.warning("focus_app failed: %s", exc)
+        return False
 
 
 # Comprehensive character mapping: (keycode, require_shift)
@@ -144,7 +168,9 @@ class GuiAutomationTool(BaseTool):
         return ToolSpec(
             name=_TOOL_NAME,
             description=(
-                "Simulate native keyboard and mouse input on Linux/Wayland. Actions: "
+                "Simulate native keyboard, mouse and desktop app interaction on Linux/Wayland. Actions: "
+                "'send_desktop_message' (brings app like 'zapzap'/'whatsapp' to front and types text + Enter to send it), "
+                "'focus_app' (brings app to foreground using 'app', e.g. 'zapzap', 'chrome', 'telegram'), "
                 "'type_text' (types literal string into active window, optional 'press_enter': true), "
                 "'hotkey' (presses key combination, e.g. 'ctrl+c', 'alt+tab', 'super', 'enter', 'ctrl+alt+t'), "
                 "'click' (clicks mouse button: 'left', 'right', 'middle', 'double'), "
@@ -156,12 +182,16 @@ class GuiAutomationTool(BaseTool):
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["type_text", "hotkey", "click", "move_mouse", "scroll"],
+                        "enum": ["send_desktop_message", "focus_app", "type_text", "hotkey", "click", "move_mouse", "scroll"],
                         "description": "Action to perform.",
+                    },
+                    "app": {
+                        "type": "string",
+                        "description": "Application name for 'focus_app' or 'send_desktop_message' (e.g. 'zapzap', 'whatsapp', 'chrome').",
                     },
                     "text": {
                         "type": "string",
-                        "description": "Text to type for 'type_text'.",
+                        "description": "Text to type for 'type_text' or message for 'send_desktop_message'.",
                     },
                     "press_enter": {
                         "type": "boolean",
@@ -210,7 +240,11 @@ class GuiAutomationTool(BaseTool):
             return ToolResult(tool_name=_TOOL_NAME, content="Falta parámetro 'action'.", success=False)
 
         try:
-            if action == "type_text":
+            if action == "send_desktop_message":
+                return self._send_desktop_message(params)
+            elif action == "focus_app":
+                return self._focus_app(params)
+            elif action == "type_text":
                 return self._type_text(params)
             elif action == "hotkey":
                 return self._hotkey(params)
@@ -226,6 +260,34 @@ class GuiAutomationTool(BaseTool):
             logger.exception("GUI automation error")
             return ToolResult(tool_name=_TOOL_NAME, content=f"Error en automatización GUI: {exc}", success=False)
 
+    def _focus_app(self, params: Dict[str, Any]) -> ToolResult:
+        app = params.get("app", "").strip()
+        if not app:
+            return ToolResult(tool_name=_TOOL_NAME, content="'app' es requerido para focus_app.", success=False)
+
+        ok = _focus_desktop_app(app)
+        if ok:
+            return ToolResult(tool_name=_TOOL_NAME, content=f"🖥️ Aplicación '{app}' traída al frente.", success=True)
+        return ToolResult(tool_name=_TOOL_NAME, content=f"No se pudo enfocar la aplicación '{app}'.", success=False)
+
+    def _send_desktop_message(self, params: Dict[str, Any]) -> ToolResult:
+        app = params.get("app", "zapzap").strip() or "zapzap"
+        text = params.get("text", "").strip()
+        if not text:
+            return ToolResult(tool_name=_TOOL_NAME, content="'text' es requerido para enviar mensaje.", success=False)
+
+        _focus_desktop_app(app)
+        time.sleep(0.6)  # Allow window manager to switch focus
+
+        type_res = self._type_text({"text": text, "press_enter": True})
+        if type_res.success:
+            return ToolResult(
+                tool_name=_TOOL_NAME,
+                content=f"💬 Mensaje enviado en {app} al chat activo: \"{text}\"",
+                success=True,
+            )
+        return type_res
+
     def _type_text(self, params: Dict[str, Any]) -> ToolResult:
         text = params.get("text", "")
         if not text:
@@ -237,8 +299,13 @@ class GuiAutomationTool(BaseTool):
         time.sleep(0.05)
         try:
             for char in text:
-                if char in _CHAR_MAP:
-                    code, need_shift = _CHAR_MAP[char]
+                target_char = char
+                if target_char not in _CHAR_MAP:
+                    # Normalize accented characters: á -> a, ñ -> n, etc.
+                    target_char = unicodedata.normalize("NFKD", char).encode("ASCII", "ignore").decode("ASCII")
+
+                if target_char in _CHAR_MAP:
+                    code, need_shift = _CHAR_MAP[target_char]
                     if need_shift:
                         ui.write(ecodes.EV_KEY, ecodes.KEY_LEFTSHIFT, 1)
                         ui.syn()
@@ -253,9 +320,10 @@ class GuiAutomationTool(BaseTool):
                     time.sleep(0.01)
 
             if press_enter:
+                time.sleep(0.05)
                 ui.write(ecodes.EV_KEY, ecodes.KEY_ENTER, 1)
                 ui.syn()
-                time.sleep(0.02)
+                time.sleep(0.03)
                 ui.write(ecodes.EV_KEY, ecodes.KEY_ENTER, 0)
                 ui.syn()
 

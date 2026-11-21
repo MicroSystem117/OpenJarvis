@@ -309,6 +309,27 @@ class NativeReActAgent(ToolUsingAgent):
                     },
                 )
 
+            # Anti-hallucination check for fake action claims without tool execution
+            fake_pattern = r"\b(ha sido enviado|he enviado|mensaje enviado|se envi[oó]|se ha enviado|captura tomada|he tomado la captura|captura enviada|evento creado|evento agendado|tarea creada|he creado la tarea|archivo modificado|correo enviado)\b"
+            if not all_tool_results and turns < (self._max_turns or 10) - 1:
+                target_check = parsed.get("final_answer") or content
+                m_claim = re.search(fake_pattern, target_check, re.IGNORECASE)
+                if m_claim:
+                    logger.warning("Intercepted hallucinated action claim without tool call: %s", m_claim.group(0))
+                    messages.append(Message(role=Role.ASSISTANT, content=content))
+                    messages.append(
+                        Message(
+                            role=Role.USER,
+                            content=(
+                                f"ERROR DE VERACIDAD: Afirmaste '{m_claim.group(0)}', pero NO ejecutaste ninguna herramienta en este turno. "
+                                "Tienes terminantemente prohibido fingir que enviaste un mensaje, tomaste una captura o ejecutaste una acción externa sin haber invocado la herramienta correspondiente. "
+                                "Si requieres realizar la acción, invoca la herramienta ahora (ej. gui_automation con send_desktop_message, screen_vision, google_gmail, etc.). "
+                                "Si no tienes una herramienta para hacerlo directamente, responde con honestidad total explicando tus límites."
+                            ),
+                        )
+                    )
+                    continue
+
             # Final answer?
             if parsed["final_answer"]:
                 self._emit_turn_end(turns=turns)
@@ -317,6 +338,13 @@ class NativeReActAgent(ToolUsingAgent):
                     r"^(?:Final Answer|Respuesta Final):\s*",
                     "",
                     parsed["final_answer"],
+                    flags=re.IGNORECASE,
+                ).strip()
+                # Clean up call-center cliches
+                clean_ans = re.sub(
+                    r"\s*¿(?:Necesitas|Hay algo|Deseas)[^?]+(?:listos por ahora|apoyarte|colaboro|más)[^?]*\?",
+                    "",
+                    clean_ans,
                     flags=re.IGNORECASE,
                 ).strip()
                 return AgentResult(
@@ -333,6 +361,12 @@ class NativeReActAgent(ToolUsingAgent):
                 clean = parsed.get("thought") or content
                 clean = re.sub(
                     r"^(?:Thought|Pensamiento):\s*",
+                    "",
+                    clean,
+                    flags=re.IGNORECASE,
+                ).strip()
+                clean = re.sub(
+                    r"\s*¿(?:Necesitas|Hay algo|Deseas)[^?]+(?:listos por ahora|apoyarte|colaboro|más)[^?]*\?",
                     "",
                     clean,
                     flags=re.IGNORECASE,
