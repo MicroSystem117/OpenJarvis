@@ -93,24 +93,38 @@ def refresh_access_token(credentials_path: str) -> str:
 
 
 def call_with_refresh(
-    api_fn: Callable[..., Dict[str, Any]],
+    api_fn: Callable[..., Any],
     credentials_path: str,
     *args: Any,
     **kwargs: Any,
-) -> Dict[str, Any]:
+) -> Any:
     """Invoke ``api_fn(token, *args, **kwargs)`` with one-shot 401 auto-refresh.
 
     Loads the current access token from disk, calls the helper, and if Google
-    returns 401 (the access token has expired or been revoked) uses the stored
-    refresh_token to mint a new access_token, updates the credentials file,
-    and retries the call exactly once.
-
-    Any other ``HTTPStatusError`` is re-raised unchanged — auth-related retries
-    end here; transient 5xx / timeout retries belong further up the stack.
+    returns 401 (either via HTTPStatusError or by returning a (401, ...) status)
+    uses the stored refresh_token to mint a new access_token, updates the credentials
+    file, and retries the call exactly once.
     """
     token = current_access_token(credentials_path)
     try:
-        return api_fn(token, *args, **kwargs)
+        res = api_fn(token, *args, **kwargs)
+        # Handle helpers that return (status_code, data) tuples instead of raising
+        if isinstance(res, tuple) and len(res) >= 1 and res[0] == 401:
+            logger.info(
+                "Google helper returned status 401 on %s — auto-refreshing token and retrying.",
+                getattr(api_fn, "__name__", "<api_fn>"),
+            )
+            new_token = refresh_access_token(credentials_path)
+            return api_fn(new_token, *args, **kwargs)
+        # Handle dict error payloads with code 401
+        if isinstance(res, dict) and isinstance(res.get("error"), dict) and res["error"].get("code") == 401:
+            logger.info(
+                "Google helper returned error code 401 on %s — auto-refreshing token and retrying.",
+                getattr(api_fn, "__name__", "<api_fn>"),
+            )
+            new_token = refresh_access_token(credentials_path)
+            return api_fn(new_token, *args, **kwargs)
+        return res
     except httpx.HTTPStatusError as exc:
         if exc.response is None or exc.response.status_code != 401:
             raise
