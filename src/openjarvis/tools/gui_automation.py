@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import subprocess
 import time
 import unicodedata
+import uuid
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
@@ -27,6 +29,85 @@ except ImportError:
     ecodes = None
 
 
+_DESKTOP_DIRS = [
+    Path("/usr/share/applications"),
+    Path("/var/lib/flatpak/exports/share/applications"),
+    Path(os.path.expanduser("~/.local/share/applications")),
+    Path(os.path.expanduser("~/.local/share/flatpak/exports/share/applications")),
+]
+
+_APP_ALIASES = {
+    "chrome": "google-chrome",
+    "google chrome": "google-chrome",
+    "browser": "google-chrome",
+    "navegador": "google-chrome",
+    "whatsapp": "com.rtosta.zapzap",
+    "zap": "com.rtosta.zapzap",
+    "zapzap": "com.rtosta.zapzap",
+    "ide": "antigravity-ide",
+    "code": "antigravity-ide",
+    "antigravity": "antigravity-ide",
+    "antigravity-ide": "antigravity-ide",
+    "terminal": "Alacritty",
+    "alacritty": "Alacritty",
+    "consola": "Alacritty",
+    "dolphin": "org.kde.dolphin",
+    "archivos": "org.kde.dolphin",
+    "carpetas": "org.kde.dolphin",
+    "explorador": "org.kde.dolphin",
+    "calculadora": "org.kde.kcalc",
+    "calc": "org.kde.kcalc",
+    "kcalc": "org.kde.kcalc",
+    "telegram": "org.telegram.desktop",
+    "tg": "org.telegram.desktop",
+    "obs": "com.obsproject.Studio",
+    "discord": "discord",
+    "steam": "steam",
+    "spotify": "spotify",
+    "preferencias": "systemsettings",
+    "configuracion": "systemsettings",
+    "ajustes": "systemsettings",
+}
+
+
+def find_desktop_file(query: str) -> Tuple[Optional[str], Optional[str]]:
+    """Find desktop entry file for application name or alias."""
+    q = query.lower().strip()
+    target_id = _APP_ALIASES.get(q, q)
+
+    # 1. Direct exact match
+    for d in _DESKTOP_DIRS:
+        if not d.exists():
+            continue
+        direct = d / f"{target_id}.desktop"
+        if direct.exists():
+            return target_id, str(direct)
+
+    # 2. Match stem
+    for d in _DESKTOP_DIRS:
+        if not d.exists():
+            continue
+        for f in d.glob("*.desktop"):
+            stem_low = f.stem.lower()
+            if target_id == stem_low or target_id in stem_low or q in stem_low:
+                return f.stem, str(f)
+
+    # 3. Match Name= inside desktop entry
+    for d in _DESKTOP_DIRS:
+        if not d.exists():
+            continue
+        for f in d.glob("*.desktop"):
+            try:
+                with open(f, "r", errors="ignore") as fp:
+                    for line in fp:
+                        if line.startswith("Name=") and q in line[5:].lower():
+                            return f.stem, str(f)
+            except Exception:
+                pass
+
+    return None, None
+
+
 def _focus_desktop_app(app_name: str) -> bool:
     """Bring specified application window to the foreground under KDE Plasma / Wayland."""
     name = app_name.lower().strip()
@@ -35,33 +116,41 @@ def _focus_desktop_app(app_name: str) -> bool:
         target_query = "zapzap"
     elif name in ("code", "ide"):
         target_query = "antigravity"
-    elif name in ("chrome", "browser"):
+    elif name in ("chrome", "browser", "navegador"):
         target_query = "chrome"
     elif name in ("tg", "telegram"):
         target_query = "telegram"
+    elif name in ("calculadora", "calc", "kcalc"):
+        target_query = "kcalc"
+    elif name in ("dolphin", "archivos", "carpetas", "explorador"):
+        target_query = "dolphin"
+    elif name in ("terminal", "consola", "alacritty"):
+        target_query = "alacritty"
 
-    # 1. Primary: KWin D-Bus scripting to bypass Wayland Focus Stealing Prevention
     try:
+        token = uuid.uuid4().hex[:8]
         script = f"""
+        var found = false;
         var windows = workspace.windowList();
         for (var i = 0; i < windows.length; i++) {{
             var w = windows[i];
-            var cap = w.caption ? w.caption.toLowerCase() : "";
-            var rc = w.resourceClass ? w.resourceClass.toLowerCase() : "";
+            var cap = (w.caption || "").toLowerCase();
+            var rc = (w.resourceClass || "").toLowerCase();
             if (cap.indexOf("{target_query}") !== -1 || rc.indexOf("{target_query}") !== -1) {{
                 w.minimized = false;
                 workspace.activeWindow = w;
                 workspace.raiseWindow(w);
+                found = true;
                 break;
             }}
         }}
+        console.info("JARVIS_KWIN_FOCUS:{token}:" + (found ? "FOUND" : "NOT_FOUND"));
         """
-        script_file = f"/tmp/kwin_focus_{target_query}.js"
+        script_file = f"/tmp/kwin_focus_{token}.js"
+        plugin_name = f"focus_{token}"
         with open(script_file, "w") as f:
             f.write(script)
 
-        # Unique plugin name avoids KWin -1 duplicate name cache collision
-        plugin_name = f"focus_{target_query}_{int(time.time() * 1000)}"
         load_res = subprocess.run(
             ["qdbus6", "org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.loadScript", script_file, plugin_name],
             capture_output=True,
@@ -80,30 +169,20 @@ def _focus_desktop_app(app_name: str) -> bool:
                 capture_output=True,
                 timeout=2,
             )
-            time.sleep(0.4)
-            return True
+            time.sleep(0.08)
+            j_res = subprocess.run(
+                ["journalctl", "--user", "-u", "plasma-kwin_wayland", "-n", "25", "--no-pager"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            for line in reversed(j_res.stdout.splitlines()):
+                if f"JARVIS_KWIN_FOCUS:{token}:" in line:
+                    return ":FOUND" in line
     except Exception as exc:
         logger.debug("KWin script focus failed: %s", exc)
 
-    # 2. Fallback: gtk-launch
-    desktop_map = {
-        "zapzap": "com.rtosta.zapzap",
-        "whatsapp": "com.rtosta.zapzap",
-        "chrome": "google-chrome",
-        "browser": "google-chrome",
-        "firefox": "firefox",
-        "telegram": "org.telegram.desktop",
-        "code": "antigravity",
-        "ide": "antigravity",
-    }
-    target = desktop_map.get(name, name)
-    try:
-        res = subprocess.run(["gtk-launch", target], capture_output=True, timeout=5)
-        time.sleep(0.3)
-        return res.returncode == 0
-    except Exception as exc:
-        logger.warning("focus_app fallback failed: %s", exc)
-        return False
+    return False
 
 
 # Comprehensive character mapping: (keycode, require_shift)
@@ -228,12 +307,13 @@ class GuiAutomationTool(BaseTool):
             name=_TOOL_NAME,
             description=(
                 "Simulate native keyboard, mouse and desktop app interaction on Linux/Wayland. Actions: "
+                "'open_app' (launches or brings any desktop application to the front, e.g. 'calculadora', 'dolphin', 'chrome', 'zapzap', 'alacritty', 'antigravity-ide'; takes 'app'), "
                 "'ide_open_project' (opens a project folder/directory in Antigravity IDE and brings it to front; takes 'path', e.g. 'openjarvis', 'projects', '~/Projects/app'), "
                 "'ide_open_file' (opens a file at optional line in Antigravity IDE and brings it to front; takes 'path', optional 'line'), "
                 "'ide_chat' (brings Antigravity IDE to front and submits an AI prompt to its inline agent; takes 'prompt' or 'text'), "
                 "'whatsapp_open_chat' (ONLY opens and switches to the specified contact's chat in WhatsApp/ZapZap without sending any message; takes 'contact'), "
                 "'send_desktop_message' (brings app like 'zapzap' to front, optionally switches to 'contact' first, and types text + Enter to send it; takes 'text', optional 'contact'), "
-                "'focus_app' (brings app to foreground using 'app', e.g. 'zapzap', 'chrome', 'antigravity', 'telegram'), "
+                "'focus_app' (brings app to foreground or launches it using 'app', e.g. 'zapzap', 'chrome', 'antigravity', 'telegram', 'calculadora'), "
                 "'type_text' (types literal string into active window, optional 'press_enter': true), "
                 "'hotkey' (presses key combination, e.g. 'ctrl+c', 'alt+tab', 'super', 'enter', 'ctrl+alt+t'), "
                 "'click' (clicks mouse button: 'left', 'right', 'middle', 'double'), "
@@ -245,7 +325,7 @@ class GuiAutomationTool(BaseTool):
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["ide_open_project", "ide_open_file", "ide_chat", "whatsapp_open_chat", "send_desktop_message", "focus_app", "type_text", "hotkey", "click", "move_mouse", "scroll"],
+                        "enum": ["open_app", "ide_open_project", "ide_open_file", "ide_chat", "whatsapp_open_chat", "send_desktop_message", "focus_app", "type_text", "hotkey", "click", "move_mouse", "scroll"],
                         "description": "Action to perform.",
                     },
                     "path": {
@@ -319,7 +399,9 @@ class GuiAutomationTool(BaseTool):
             return ToolResult(tool_name=_TOOL_NAME, content="Falta parámetro 'action'.", success=False)
 
         try:
-            if action == "ide_open_project":
+            if action == "open_app":
+                return self._open_app(params)
+            elif action == "ide_open_project":
                 return self._ide_open_project(params)
             elif action == "ide_open_file":
                 return self._ide_open_file(params)
@@ -518,15 +600,66 @@ class GuiAutomationTool(BaseTool):
         finally:
             ui.close()
 
+    def _open_app(self, params: Dict[str, Any]) -> ToolResult:
+        app = (params.get("app") or params.get("text") or params.get("name") or "").strip()
+        if not app:
+            return ToolResult(tool_name=_TOOL_NAME, content="Falta el parámetro 'app' con el nombre de la aplicación.", success=False)
+
+        # 1. If window is already open, raise it to foreground
+        if _focus_desktop_app(app):
+            return ToolResult(
+                tool_name=_TOOL_NAME,
+                content=f"🖥️ La aplicación '{app}' ya estaba abierta y se trajo al primer plano.",
+                success=True,
+            )
+
+        # 2. Find desktop entry and launch via gtk-launch
+        stem, dpath = find_desktop_file(app)
+        if stem:
+            try:
+                subprocess.Popen(["gtk-launch", stem], start_new_session=True)
+                time.sleep(1.2)
+                _focus_desktop_app(stem)
+                return ToolResult(
+                    tool_name=_TOOL_NAME,
+                    content=f"🚀 Aplicación '{app}' ({stem}) iniciada con éxito y traída al primer plano.",
+                    success=True,
+                )
+            except Exception as exc:
+                return ToolResult(tool_name=_TOOL_NAME, content=f"Error iniciando aplicación '{app}': {exc}", success=False)
+
+        # 3. Fallback: check if binary is in PATH
+        bin_path = shutil.which(app)
+        if bin_path:
+            try:
+                subprocess.Popen([bin_path], start_new_session=True)
+                time.sleep(1.2)
+                _focus_desktop_app(app)
+                return ToolResult(
+                    tool_name=_TOOL_NAME,
+                    content=f"🚀 Aplicación '{app}' ({bin_path}) iniciada con éxito y traída al primer plano.",
+                    success=True,
+                )
+            except Exception as exc:
+                return ToolResult(tool_name=_TOOL_NAME, content=f"Error ejecutando '{bin_path}': {exc}", success=False)
+
+        return ToolResult(
+            tool_name=_TOOL_NAME,
+            content=f"❌ No se encontró la aplicación '{app}' en el sistema ni en los accesos de escritorio.",
+            success=False,
+        )
+
     def _focus_app(self, params: Dict[str, Any]) -> ToolResult:
-        app = params.get("app", "").strip()
+        app = (params.get("app") or params.get("text") or params.get("name") or "").strip()
         if not app:
             return ToolResult(tool_name=_TOOL_NAME, content="'app' es requerido para focus_app.", success=False)
 
         ok = _focus_desktop_app(app)
         if ok:
             return ToolResult(tool_name=_TOOL_NAME, content=f"🖥️ Aplicación '{app}' traída al frente.", success=True)
-        return ToolResult(tool_name=_TOOL_NAME, content=f"No se pudo enfocar la aplicación '{app}'.", success=False)
+
+        # Fallback: if not running, launch it
+        return self._open_app(params)
 
     def _send_desktop_message(self, params: Dict[str, Any]) -> ToolResult:
         app = params.get("app", "zapzap").strip() or "zapzap"
