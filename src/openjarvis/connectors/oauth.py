@@ -124,7 +124,7 @@ OAUTH_PROVIDERS: Dict[str, OAuthProvider] = {
 def get_provider_for_connector(connector_id: str) -> Optional[OAuthProvider]:
     """Return the OAuthProvider that covers *connector_id*, or ``None``."""
     for provider in OAUTH_PROVIDERS.values():
-        if connector_id in provider.connector_ids:
+        if connector_id == provider.name or connector_id in provider.connector_ids:
             return provider
     return None
 
@@ -557,7 +557,7 @@ def _wait_for_callback_code(
     host: str = "127.0.0.1",
     port: int = 8789,
     path: str = "/callback",
-    timeout: int = 120,
+    timeout: int = 300,
 ) -> str:
     """Start a localhost HTTP server and wait for ``?code=`` on *path*.
 
