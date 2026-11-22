@@ -54,7 +54,7 @@ def _disconnect_source(registry: object, source: str) -> None:
         console.print(f"[red]Failed to disconnect {source}: {exc}[/red]")
 
 
-def _connect_source(registry: object, source: str, path: str = "") -> None:
+def _connect_source(registry: object, source: str, path: str = "", force: bool = False) -> None:
     """Route connector setup by auth_type."""
     console = Console()
 
@@ -105,8 +105,8 @@ def _connect_source(registry: object, source: str, path: str = "") -> None:
 
         try:
             instance = connector_cls()
-            if instance.is_connected():
-                console.print(f"[green]{source} is already connected.[/green]")
+            if instance.is_connected() and not force:
+                console.print(f"[green]{source} is already connected. Use --force to re-authenticate.[/green]")
                 return
 
             provider = get_provider_for_connector(source)
@@ -143,8 +143,8 @@ def _connect_source(registry: object, source: str, path: str = "") -> None:
 
         try:
             instance = connector_cls()
-            if instance.is_connected():
-                console.print(f"[green]{source} is already connected.[/green]")
+            if instance.is_connected() and not force:
+                console.print(f"[green]{source} is already connected. Use --force to re-authenticate.[/green]")
                 return
 
             token = click.prompt(f"Enter your {source} personal access token")
@@ -193,6 +193,12 @@ def _connect_source(registry: object, source: str, path: str = "") -> None:
     default="",
     help="Path for filesystem connectors (e.g., Obsidian vault).",
 )
+@click.option(
+    "--force",
+    "-f",
+    is_flag=True,
+    help="Force re-authentication even if already connected.",
+)
 @click.pass_context
 def connect(
     ctx: click.Context,
@@ -201,6 +207,7 @@ def connect(
     trigger_sync: bool,
     disconnect_source: str,
     path: str,
+    force: bool = False,
 ) -> None:
     """Manage data source connections (Gmail, Obsidian, etc.)."""
     # Lazy imports to avoid top-level side effects
@@ -220,7 +227,7 @@ def connect(
         return
 
     if source:
-        _connect_source(ConnectorRegistry, source, path=path)
+        _connect_source(ConnectorRegistry, source, path=path, force=force)
         return
 
     # No arguments — show help

@@ -65,7 +65,7 @@ GOOGLE_ALL_SCOPES: List[str] = [
     # gmail.modify (a superset of gmail.readonly) so the proactive agent
     # can trash and label-modify (archive) emails after user approval.
     "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/tasks.readonly",
+    "https://www.googleapis.com/auth/tasks",
 ]
 
 OAUTH_PROVIDERS: Dict[str, OAuthProvider] = {
