@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import glob
+import json
 import logging
 import os
 import shutil
@@ -311,6 +313,7 @@ class GuiAutomationTool(BaseTool):
                 "'ide_open_project' (opens a project folder/directory in Antigravity IDE and brings it to front; takes 'path', e.g. 'openjarvis', 'projects', '~/Projects/app'), "
                 "'ide_open_file' (opens a file at optional line in Antigravity IDE and brings it to front; takes 'path', optional 'line'), "
                 "'ide_chat' (brings Antigravity IDE to front and submits an AI prompt to its inline agent; takes 'prompt' or 'text'), "
+                "'ide_get_response' (checks the generation status and reads the real completed response from Antigravity IDE), "
                 "'whatsapp_open_chat' (ONLY opens and switches to the specified contact's chat in WhatsApp/ZapZap without sending any message; takes 'contact'), "
                 "'send_desktop_message' (brings app like 'zapzap' to front, optionally switches to 'contact' first, and types text + Enter to send it; takes 'text', optional 'contact'), "
                 "'focus_app' (brings app to foreground or launches it using 'app', e.g. 'zapzap', 'chrome', 'antigravity', 'telegram', 'calculadora'), "
@@ -325,7 +328,7 @@ class GuiAutomationTool(BaseTool):
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["open_app", "ide_open_project", "ide_open_file", "ide_chat", "whatsapp_open_chat", "send_desktop_message", "focus_app", "type_text", "hotkey", "click", "move_mouse", "scroll"],
+                        "enum": ["open_app", "ide_open_project", "ide_open_file", "ide_chat", "ide_get_response", "whatsapp_open_chat", "send_desktop_message", "focus_app", "type_text", "hotkey", "click", "move_mouse", "scroll"],
                         "description": "Action to perform.",
                     },
                     "path": {
@@ -407,6 +410,8 @@ class GuiAutomationTool(BaseTool):
                 return self._ide_open_file(params)
             elif action == "ide_chat":
                 return self._ide_chat(params)
+            elif action == "ide_get_response":
+                return self._ide_get_response(params)
             elif action == "whatsapp_open_chat":
                 return self._whatsapp_open_chat(params)
             elif action == "send_desktop_message":
@@ -523,6 +528,76 @@ class GuiAutomationTool(BaseTool):
                 success=True,
             )
         return type_res
+
+    def _ide_get_response(self, params: Dict[str, Any]) -> ToolResult:
+        """Inspect the active Antigravity IDE session to check if generating or retrieve the latest completed response."""
+        transcripts = sorted(
+            glob.glob("/home/microsystem/.gemini/antigravity/brain/*/.system_generated/logs/transcript.jsonl"),
+            key=os.path.getmtime,
+            reverse=True,
+        )
+        if not transcripts:
+            return ToolResult(
+                tool_name=_TOOL_NAME,
+                content="❌ No se encontró ningún registro de conversación activo de Antigravity IDE.",
+                success=False,
+            )
+
+        latest_path = transcripts[0]
+        try:
+            with open(latest_path, "r", encoding="utf-8", errors="ignore") as f:
+                lines = [json.loads(line) for line in f if line.strip()]
+        except Exception as exc:
+            return ToolResult(
+                tool_name=_TOOL_NAME,
+                content=f"Error leyendo el registro de Antigravity IDE: {exc}",
+                success=False,
+            )
+
+        last_user_idx = -1
+        last_user_prompt = ""
+        for i in range(len(lines) - 1, -1, -1):
+            item = lines[i]
+            if item.get("source") == "USER_EXPLICIT" and item.get("type") == "USER_INPUT":
+                last_user_idx = i
+                last_user_prompt = item.get("content", "")
+                break
+
+        last_model_content = None
+        is_generating = True
+        for i in range(len(lines) - 1, last_user_idx, -1):
+            item = lines[i]
+            if (
+                item.get("source") == "MODEL"
+                and item.get("type") == "PLANNER_RESPONSE"
+                and item.get("content")
+                and not item.get("tool_calls")
+            ):
+                last_model_content = item.get("content")
+                is_generating = False
+                break
+
+        if is_generating or not last_model_content:
+            return ToolResult(
+                tool_name=_TOOL_NAME,
+                content=(
+                    "⏳ ESTADO: Antigravity IDE todavía está procesando la solicitud y redactando su respuesta en pantalla.\n"
+                    "⚠️ REGLA PARA JARVIS: Aún no ha terminado de responder. Informa a Elías que Antigravity sigue pensando/generando en pantalla y que por favor espere un momento."
+                ),
+                success=True,
+            )
+
+        return ToolResult(
+            tool_name=_TOOL_NAME,
+            content=(
+                f"✅ ESTADO: Antigravity IDE ha completado su respuesta.\n"
+                f"--- RESPUESTA REAL DE ANTIGRAVITY ---\n"
+                f"{last_model_content}\n"
+                f"-------------------------------------\n"
+                "NOTA PARA JARVIS: Esta es la respuesta REAL y textual de Antigravity. Muéstrasela a Elías o sintetízala con fidelidad absoluta sin inventar nada."
+            ),
+            success=True,
+        )
 
     def _whatsapp_open_chat(self, params: Dict[str, Any]) -> ToolResult:
         contact = (params.get("contact", "") or params.get("text", "") or params.get("name", "")).strip()

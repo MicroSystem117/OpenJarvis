@@ -343,22 +343,27 @@ class NativeReActAgent(ToolUsingAgent):
 
             # Anti-hallucination check for fake IDE / Antigravity response claims
             ide_fake_pattern = (
-                r"(agente.*(?:ha respondido|devolvi[oó]|proces[oó])|antigravity.*(?:ha respondido|dijo|respondi[oó])|"
+                r"(agente.*(?:ha respondido|devolvi[oó]|proces[oó])|antigravity.*(?:ha respondido|dijo|respondi[oó]|acaba de responder)|"
                 r"aquí tienes la respuesta que (?:me dio|ha dado)|respuesta del agente|el agente del ide ya ha procesado|"
                 r"el agente de ia dentro de antigravity ide ha respondido)"
             )
             m_ide = re.search(ide_fake_pattern, target_check, re.IGNORECASE)
-            if m_ide and turns < (self._max_turns or 10) - 1:
-                logger.warning("Intercepted hallucinated IDE response claim: %s", m_ide.group(0))
+            has_real_ide_response = any(
+                tr.tool_name == "gui_automation" and "RESPUESTA REAL DE ANTIGRAVITY" in str(tr.content or "")
+                for tr in all_tool_results
+            )
+            if m_ide and not has_real_ide_response and turns < (self._max_turns or 10) - 1:
+                logger.warning("Intercepted hallucinated IDE response claim without ide_get_response: %s", m_ide.group(0))
                 messages.append(Message(role=Role.ASSISTANT, content=content))
                 messages.append(
                     Message(
                         role=Role.USER,
                         content=(
-                            f"ERROR DE VERACIDAD CRÍTICO: Afirmaste '{m_ide.group(0)}'. "
-                            "TÚ NO TIENES LA RESPUESTA DE ANTIGRAVITY. La herramienta 'ide_chat' solo envía la pregunta por teclado virtual a la IDE. "
-                            "Antigravity apenas está pensando y redactando su respuesta en pantalla. Tienes terminantemente prohibido inventar o simular lo que Antigravity respondió. "
-                            "Debes responderle a Elías únicamente confirmando que enviaste la pregunta a Antigravity en la IDE y pidiéndole con honestidad que espere un momento a que Antigravity termine de redactar su respuesta en pantalla."
+                            f"ERROR DE VERACIDAD CRÍTICO: Afirmaste '{m_ide.group(0)}', pero NO obtuviste la respuesta real de Antigravity mediante la herramienta. "
+                            "TÚ NO PUEDES SABER QUÉ RESPONDIÓ ANTIGRAVITY SIN LEERLO DEL SISTEMA. "
+                            "Tienes terminantemente prohibido inventar o simular lo que Antigravity respondió. "
+                            "Si Elías te pregunta qué respondió Antigravity o qué dijo la IDE, debes invocar 'gui_automation' con action='ide_get_response'. "
+                            "Si la herramienta indica que aún está procesando, dile con honestidad que espere un momento; si ya completó, entonces podrás compartirle la respuesta real."
                         ),
                     )
                 )
