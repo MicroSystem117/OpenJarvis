@@ -317,10 +317,11 @@ class NativeReActAgent(ToolUsingAgent):
                 r"abierto\s+.*\bchat\b|abierto\s+y\s+enfocado|en primer plano|tienes\s+.*\bprimer plano\b|"
                 r"proyecto\s+.*\babierto\b|carpeta\s+.*\babierta\b|aplicaci[oó]n\s+.*\babierta\b|"
                 r"programa\s+.*\babierto\b|calculadora\s+.*\babierta\b|dolphin\s+.*\babierto\b|"
-                r"chrome\s+.*\babierto\b|listo.*enviado|listo.*abierto)"
+                r"chrome\s+.*\babierto\b|listo.*enviado|listo.*abierto|"
+                r"agente.*ha respondido|antigravity.*ha respondido|el agente.*ha procesado)"
             )
+            target_check = parsed.get("final_answer") or content
             if not all_tool_results and turns < (self._max_turns or 10) - 1:
-                target_check = parsed.get("final_answer") or content
                 m_claim = re.search(fake_pattern, target_check, re.IGNORECASE)
                 if m_claim:
                     logger.warning("Intercepted hallucinated action claim without tool call: %s", m_claim.group(0))
@@ -339,6 +340,29 @@ class NativeReActAgent(ToolUsingAgent):
                         )
                     )
                     continue
+
+            # Anti-hallucination check for fake IDE / Antigravity response claims
+            ide_fake_pattern = (
+                r"(agente.*(?:ha respondido|devolvi[oó]|proces[oó])|antigravity.*(?:ha respondido|dijo|respondi[oó])|"
+                r"aquí tienes la respuesta que (?:me dio|ha dado)|respuesta del agente|el agente del ide ya ha procesado|"
+                r"el agente de ia dentro de antigravity ide ha respondido)"
+            )
+            m_ide = re.search(ide_fake_pattern, target_check, re.IGNORECASE)
+            if m_ide and turns < (self._max_turns or 10) - 1:
+                logger.warning("Intercepted hallucinated IDE response claim: %s", m_ide.group(0))
+                messages.append(Message(role=Role.ASSISTANT, content=content))
+                messages.append(
+                    Message(
+                        role=Role.USER,
+                        content=(
+                            f"ERROR DE VERACIDAD CRÍTICO: Afirmaste '{m_ide.group(0)}'. "
+                            "TÚ NO TIENES LA RESPUESTA DE ANTIGRAVITY. La herramienta 'ide_chat' solo envía la pregunta por teclado virtual a la IDE. "
+                            "Antigravity apenas está pensando y redactando su respuesta en pantalla. Tienes terminantemente prohibido inventar o simular lo que Antigravity respondió. "
+                            "Debes responderle a Elías únicamente confirmando que enviaste la pregunta a Antigravity en la IDE y pidiéndole con honestidad que espere un momento a que Antigravity termine de redactar su respuesta en pantalla."
+                        ),
+                    )
+                )
+                continue
 
             # Final answer?
             if parsed["final_answer"]:

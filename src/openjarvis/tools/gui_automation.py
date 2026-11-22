@@ -511,7 +511,15 @@ class GuiAutomationTool(BaseTool):
         if type_res.success:
             return ToolResult(
                 tool_name=_TOOL_NAME,
-                content=f"🤖 Instrucción enviada a la IA de Antigravity IDE: \"{prompt}\"",
+                content=(
+                    f"🤖 Pregunta enviada a Antigravity IDE: \"{prompt}\".\n"
+                    "⚠️ REGLA DE VERACIDAD CRÍTICA:\n"
+                    "- La instrucción apenas se acaba de ingresar en la IDE por teclado virtual.\n"
+                    "- Antigravity está procesando la solicitud y pensando/escribiendo la respuesta en tiempo real en la pantalla.\n"
+                    "- TÚ NO CONOCES LA RESPUESTA DE ANTIGRAVITY TODAVÍA (tarda tiempo en generar su respuesta en la IDE).\n"
+                    "- ESTÁ TERMINANTEMENTE PROHIBIDO inventar, asumir, resumir o simular lo que Antigravity respondió o va a responder.\n"
+                    "- Dile a Elías con total honestidad que la pregunta ya fue enviada a Antigravity en la IDE y pídele que espere un momento a que Antigravity termine de redactar su respuesta en pantalla."
+                ),
                 success=True,
             )
         return type_res
