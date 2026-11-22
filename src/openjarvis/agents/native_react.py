@@ -7,6 +7,7 @@ implementation, not an integration with an external project.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any, List, Optional
 
@@ -20,6 +21,8 @@ from openjarvis.core.registry import AgentRegistry
 from openjarvis.core.types import Message, Role, ToolCall, ToolResult, _message_to_dict
 from openjarvis.engine._stubs import InferenceEngine
 from openjarvis.tools._stubs import BaseTool, build_tool_descriptions
+
+logger = logging.getLogger(__name__)
 
 REACT_SYSTEM_PROMPT = """\
 You are Jarvis, a precise and truthful ReAct agent. For each step, respond with exactly one of:
@@ -343,27 +346,37 @@ class NativeReActAgent(ToolUsingAgent):
 
             # Anti-hallucination check for fake IDE / Antigravity response claims
             ide_fake_pattern = (
-                r"(agente.*(?:ha respondido|devolvi[oó]|proces[oó])|antigravity.*(?:ha respondido|dijo|respondi[oó]|acaba de responder)|"
-                r"aquí tienes la respuesta que (?:me dio|ha dado)|respuesta del agente|el agente del ide ya ha procesado|"
-                r"el agente de ia dentro de antigravity ide ha respondido)"
+                r"(agente.*(?:respondi|devolvi|proces|indic|dice|dijo)|"
+                r"antigravity.*(?:respondi|dijo|dice|indic|proces)|"
+                r"acaba de responder|su respuesta textual es|respuesta del agente|"
+                r"aquí tienes la respuesta|el agente del ide|el agente de ia dentro de|"
+                r"el agente me acaba de|el agente del ide me)"
             )
             m_ide = re.search(ide_fake_pattern, target_check, re.IGNORECASE)
+            is_query_about_ide = bool(
+                re.search(r"\b(antigravity|ide|agente)\b", query, re.IGNORECASE)
+                and (
+                    re.search(r"(respond|dij|dic|indic|qu[eé]\s+dijo|qu[eé]\s+pas[oó]|respuesta)", query, re.IGNORECASE)
+                    or query.strip().lower() in ("antigravity", "ide", "antigravity ide")
+                )
+            )
             has_real_ide_response = any(
-                tr.tool_name == "gui_automation" and "RESPUESTA REAL DE ANTIGRAVITY" in str(tr.content or "")
+                tr.tool_name == "gui_automation" and ("RESPUESTA REAL DE ANTIGRAVITY" in str(tr.content or "") or "Antigravity IDE todavía está procesando" in str(tr.content or ""))
                 for tr in all_tool_results
             )
-            if m_ide and not has_real_ide_response and turns < (self._max_turns or 10) - 1:
-                logger.warning("Intercepted hallucinated IDE response claim without ide_get_response: %s", m_ide.group(0))
+            if (m_ide or is_query_about_ide) and not has_real_ide_response and turns < (self._max_turns or 10) - 1:
+                claim_str = m_ide.group(0) if m_ide else "respuesta sobre la IDE/Antigravity"
+                logger.warning("Intercepted hallucinated IDE response claim without ide_get_response: %s", claim_str)
                 messages.append(Message(role=Role.ASSISTANT, content=content))
                 messages.append(
                     Message(
                         role=Role.USER,
                         content=(
-                            f"ERROR DE VERACIDAD CRÍTICO: Afirmaste '{m_ide.group(0)}', pero NO obtuviste la respuesta real de Antigravity mediante la herramienta. "
-                            "TÚ NO PUEDES SABER QUÉ RESPONDIÓ ANTIGRAVITY SIN LEERLO DEL SISTEMA. "
-                            "Tienes terminantemente prohibido inventar o simular lo que Antigravity respondió. "
-                            "Si Elías te pregunta qué respondió Antigravity o qué dijo la IDE, debes invocar 'gui_automation' con action='ide_get_response'. "
-                            "Si la herramienta indica que aún está procesando, dile con honestidad que espere un momento; si ya completó, entonces podrás compartirle la respuesta real."
+                            f"ERROR DE VERACIDAD CRÍTICO: Afirmaste '{claim_str}', pero NO obtuviste la respuesta real de Antigravity mediante la herramienta.\n"
+                            "TÚ NO PUEDES SABER QUÉ RESPONDIÓ ANTIGRAVITY SIN LEERLO DEL SISTEMA.\n"
+                            "Tienes terminantemente prohibido inventar o simular lo que Antigravity respondió o asumir qué dijo.\n"
+                            "Debes invocar OBLIGATORIAMENTE 'gui_automation' con action='ide_get_response'.\n"
+                            "Si la herramienta indica que aún está procesando en pantalla, dile a Elías con total honestidad que espere un momento; si ya completó, entonces podrás compartirle la respuesta real."
                         ),
                     )
                 )
