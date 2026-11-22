@@ -393,6 +393,19 @@ def _convert_tools_to_anthropic(
     return result
 
 
+def _sanitize_google_schema(schema: Any) -> Any:
+    """Recursively strip unsupported JSON schema keys for Google GenAI function declarations."""
+    if isinstance(schema, dict):
+        return {
+            k: _sanitize_google_schema(v)
+            for k, v in schema.items()
+            if k not in ("additionalProperties", "additional_properties")
+        }
+    elif isinstance(schema, list):
+        return [_sanitize_google_schema(item) for item in schema]
+    return schema
+
+
 def _convert_tools_to_google(
     openai_tools: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
@@ -404,7 +417,7 @@ def _convert_tools_to_google(
             {
                 "name": func.get("name", ""),
                 "description": func.get("description", ""),
-                "parameters": func.get("parameters", {}),
+                "parameters": _sanitize_google_schema(func.get("parameters", {})),
             }
         )
     return declarations

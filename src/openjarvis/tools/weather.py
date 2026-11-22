@@ -177,7 +177,6 @@ class WeatherTool(BaseTool):
                         ),
                     },
                 },
-                "additionalProperties": False,
             },
             category="weather",
             latency_estimate=1.0,

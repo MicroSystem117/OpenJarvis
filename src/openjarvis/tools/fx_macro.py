@@ -353,7 +353,6 @@ class FXMacroDataTool(BaseTool):
                     },
                 },
                 "required": ["action"],
-                "additionalProperties": False,
             },
             category="finance",
             latency_estimate=1.0,

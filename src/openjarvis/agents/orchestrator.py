@@ -420,11 +420,26 @@ class OrchestratorAgent(ToolUsingAgent):
     ) -> AgentResult:
         self._emit_turn_start(input)
 
+        system_prompt = self._system_prompt
+        is_query_about_ide = bool(
+            re.search(r"\b(antigravity|ide|agente)\b", input, re.IGNORECASE)
+            and (
+                re.search(r"(respond|dij|dic|indic|qu[eé]\s+dijo|qu[eé]\s+pas[oó]|respuesta)", input, re.IGNORECASE)
+                or input.strip().lower() in ("antigravity", "ide", "antigravity ide")
+            )
+        )
+        if is_query_about_ide:
+            system_prompt = (system_prompt or "") + (
+                "\n\nDIRECTIVA OBLIGATORIA: El usuario te está preguntando sobre la respuesta o estado de Antigravity IDE. "
+                "DEBES invocar la herramienta 'gui_automation' con action='ide_get_response'. "
+                "Nunca adivines ni inventes lo que Antigravity respondió."
+            )
+
         # Build initial messages
         messages = self._build_messages(
             input,
             context,
-            system_prompt=self._system_prompt,
+            system_prompt=system_prompt,
         )
 
         # Get OpenAI-format tool definitions
@@ -460,6 +475,78 @@ class OrchestratorAgent(ToolUsingAgent):
             if not raw_tool_calls:
                 content = self._check_continuation(result, messages)
                 content = self._strip_think_tags(content)
+
+                # Anti-hallucination check for desktop action claims
+                claim_patterns = (
+                    r"(?:te\s+(?:acabo\s+de\s+)?envi[eé]|envi[eé]\s+(?:el\s+)?mensaje|"
+                    r"mensaje\s+enviado|ya\s+(?:le\s+)?escrib[ií]|"
+                    r"abr[ií]\s+(?:el\s+chat|la\s+aplicaci[oó]n|zapzap|whatsapp|calculadora|chrome)|"
+                    r"acabo\s+de\s+abrir|puse\s+en\s+primer\s+plano|enfocada\s+la\s+ventana)"
+                )
+                m_claim = re.search(claim_patterns, content, re.IGNORECASE)
+                has_desktop_tool = any(
+                    tr.tool_name == "gui_automation"
+                    for tr in all_tool_results
+                )
+                if m_claim and not has_desktop_tool and turns < self._max_turns - 1:
+                    logger.warning("Orchestrator intercepted hallucinated action claim without tool call: %s", m_claim.group(0))
+                    messages.append(Message(role=Role.ASSISTANT, content=content))
+                    messages.append(
+                        Message(
+                            role=Role.USER,
+                            content=(
+                                f"ERROR DE VERACIDAD: Afirmaste '{m_claim.group(0)}', pero NO ejecutaste ninguna herramienta en este turno. "
+                                "Tienes terminantemente prohibido fingir que enviaste un mensaje, abriste un chat, enfocaste una app o ejecutaste una acción externa sin haber invocado la herramienta correspondiente. "
+                                "Si requieres abrir una app, invoca gui_automation con action='open_app'. "
+                                "Si requieres abrir WhatsApp/ZapZap, invoca gui_automation con action='whatsapp_open_chat'. "
+                                "Si requieres enviar un mensaje, invoca gui_automation con action='send_desktop_message'. "
+                                "Si no puedes hacerlo con tus herramientas, responde con honestidad total."
+                            ),
+                        )
+                    )
+                    continue
+
+                # Anti-hallucination check for fake IDE / Antigravity response claims
+                ide_fake_pattern = (
+                    r"(agente.*(?:respondi|devolvi|proces|indic|dice|dijo)|"
+                    r"antigravity.*(?:respondi|dijo|dice|indic|proces)|"
+                    r"acaba de responder|su respuesta textual es|respuesta del agente|"
+                    r"aquí tienes la respuesta|el agente del ide|el agente de ia dentro de|"
+                    r"el agente me acaba de|el agente del ide me)"
+                )
+                m_ide = re.search(ide_fake_pattern, content, re.IGNORECASE)
+                is_query_about_ide = bool(
+                    re.search(r"\b(antigravity|ide|agente)\b", input, re.IGNORECASE)
+                    and (
+                        re.search(r"(respond|dij|dic|indic|qu[eé]\s+dijo|qu[eé]\s+pas[oó]|respuesta)", input, re.IGNORECASE)
+                        or input.strip().lower() in ("antigravity", "ide", "antigravity ide")
+                    )
+                )
+                has_real_ide_response = any(
+                    tr.tool_name == "gui_automation" and (
+                        "RESPUESTA REAL DE ANTIGRAVITY" in str(tr.content or "")
+                        or "Antigravity IDE todavía está procesando" in str(tr.content or "")
+                    )
+                    for tr in all_tool_results
+                )
+                if (m_ide or is_query_about_ide) and not has_real_ide_response and turns < self._max_turns - 1:
+                    claim_str = m_ide.group(0) if m_ide else "respuesta sobre la IDE/Antigravity"
+                    logger.warning("Orchestrator intercepted hallucinated IDE response claim without ide_get_response: %s", claim_str)
+                    messages.append(Message(role=Role.ASSISTANT, content=content))
+                    messages.append(
+                        Message(
+                            role=Role.USER,
+                            content=(
+                                f"ERROR DE VERACIDAD CRÍTICO: Afirmaste '{claim_str}', pero NO obtuviste la respuesta real de Antigravity mediante la herramienta.\n"
+                                "TÚ NO PUEDES SABER QUÉ RESPONDIÓ ANTIGRAVITY SIN LEERLO DEL SISTEMA.\n"
+                                "Tienes terminantemente prohibido inventar o simular lo que Antigravity respondió o asumir qué dijo.\n"
+                                "Debes invocar OBLIGATORIAMENTE 'gui_automation' con action='ide_get_response'.\n"
+                                "Si la herramienta indica que aún está procesando en pantalla, dile a Elías con total honestidad que espere un momento; si ya completó, entonces podrás compartirle la respuesta real."
+                            ),
+                        )
+                    )
+                    continue
+
                 self._emit_turn_end(turns=turns, content_length=len(content))
                 return AgentResult(
                     content=content,

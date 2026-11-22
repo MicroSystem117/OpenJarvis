@@ -40,6 +40,7 @@ Final Answer: <your answer>
 - NEVER claim or pretend that an external action was completed (e.g. creating/updating a calendar event, creating a task, sending an email, modifying a file, or running a system command) unless you actually invoked the corresponding tool and observed a successful result in the Observation during this turn.
 - If you do not have a tool to perform a requested real-world action, or if a tool is missing or unauthorized, state the limitation or error truthfully in your Final Answer. Never invent fake success confirmations, simulated results, or imaginary links.
 - Your capabilities are strictly bounded by the tools listed below. If an action cannot be performed with the available tools, tell the user immediately.
+- When the user asks what Antigravity or the IDE answered, or asks about Antigravity/IDE responses: YOU MUST IMMEDIATELY invoke `gui_automation` with `action="ide_get_response"`. Never invent or guess what Antigravity responded. If the tool indicates that Antigravity is still processing, tell Elías truthfully that Antigravity is generating and to wait a moment. Only when the tool returns a completed response may you relay that response.
 
 # Using Skills
 
@@ -268,6 +269,22 @@ class NativeReActAgent(ToolUsingAgent):
                 system_prompt = system_prompt + "\n\n" + skill_examples_block
 
         system_prompt = self._apply_persona(system_prompt)
+        is_query_about_ide = bool(
+            re.search(r"\b(antigravity|ide|agente)\b", input, re.IGNORECASE)
+            and (
+                re.search(r"(respond|dij|dic|indic|qu[eé]\s+dijo|qu[eé]\s+pas[oó]|respuesta)", input, re.IGNORECASE)
+                or input.strip().lower() in ("antigravity", "ide", "antigravity ide")
+            )
+        )
+        if is_query_about_ide:
+            system_prompt += (
+                "\n\n## INSTRUCCIÓN OBLIGATORIA PARA ESTE TURNO\n"
+                "El usuario te está preguntando sobre la respuesta o estado de Antigravity IDE.\n"
+                "Tu PRIMERA acción debe ser OBLIGATORIAMENTE:\n"
+                "Thought: Consultaré el estado y respuesta real de Antigravity en la IDE.\n"
+                "Action: gui_automation\n"
+                'Action Input: {"action": "ide_get_response"}\n'
+            )
         messages = self._build_messages(input, context, system_prompt=system_prompt)
 
         # Inject few-shot exemplars before the user input
@@ -354,10 +371,10 @@ class NativeReActAgent(ToolUsingAgent):
             )
             m_ide = re.search(ide_fake_pattern, target_check, re.IGNORECASE)
             is_query_about_ide = bool(
-                re.search(r"\b(antigravity|ide|agente)\b", query, re.IGNORECASE)
+                re.search(r"\b(antigravity|ide|agente)\b", input, re.IGNORECASE)
                 and (
-                    re.search(r"(respond|dij|dic|indic|qu[eé]\s+dijo|qu[eé]\s+pas[oó]|respuesta)", query, re.IGNORECASE)
-                    or query.strip().lower() in ("antigravity", "ide", "antigravity ide")
+                    re.search(r"(respond|dij|dic|indic|qu[eé]\s+dijo|qu[eé]\s+pas[oó]|respuesta)", input, re.IGNORECASE)
+                    or input.strip().lower() in ("antigravity", "ide", "antigravity ide")
                 )
             )
             has_real_ide_response = any(
@@ -376,6 +393,10 @@ class NativeReActAgent(ToolUsingAgent):
                             "TÚ NO PUEDES SABER QUÉ RESPONDIÓ ANTIGRAVITY SIN LEERLO DEL SISTEMA.\n"
                             "Tienes terminantemente prohibido inventar o simular lo que Antigravity respondió o asumir qué dijo.\n"
                             "Debes invocar OBLIGATORIAMENTE 'gui_automation' con action='ide_get_response'.\n"
+                            "Tu siguiente respuesta DEBE ser exactamente:\n"
+                            "Thought: Consultaré el estado real de Antigravity IDE.\n"
+                            "Action: gui_automation\n"
+                            'Action Input: {"action": "ide_get_response"}\n'
                             "Si la herramienta indica que aún está procesando en pantalla, dile a Elías con total honestidad que espere un momento; si ya completó, entonces podrás compartirle la respuesta real."
                         ),
                     )
