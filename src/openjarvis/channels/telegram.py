@@ -408,29 +408,33 @@ class TelegramChannel(BaseChannel):
                 self._app = app
 
             async def _handle_msg(update, context):
-                msg = update.message
+                msg = getattr(update, "message", None)
                 if msg is None:
                     return
 
                 is_voice_input = False
-                text_content = msg.text or ""
+                text_content = getattr(msg, "text", "") or ""
 
-                if msg.voice or msg.audio:
+                if getattr(msg, "voice", None) or getattr(msg, "audio", None):
                     try:
                         # Indicate recording voice action
-                        try:
-                            await context.bot.send_chat_action(chat_id=msg.chat_id, action="record_voice")
-                        except Exception:
-                            pass
+                        chat_id_val = getattr(msg, "chat_id", None) or getattr(getattr(msg, "chat", None), "id", None)
+                        if context and getattr(context, "bot", None) and chat_id_val is not None:
+                            try:
+                                await context.bot.send_chat_action(chat_id=chat_id_val, action="record_voice")
+                            except Exception:
+                                pass
 
-                        media_obj = msg.voice or msg.audio
+                        media_obj = getattr(msg, "voice", None) or getattr(msg, "audio", None)
                         file_obj = await media_obj.get_file()
                         raw_bytes = await file_obj.download_as_bytearray()
 
                         from openjarvis.speech.gemini_stt import transcribe_audio_bytes
 
                         mime_type = getattr(media_obj, "mime_type", "audio/ogg") or "audio/ogg"
-                        transcribed = transcribe_audio_bytes(bytes(raw_bytes), mime_type=mime_type)
+                        transcribed = await asyncio.to_thread(
+                            transcribe_audio_bytes, bytes(raw_bytes), mime_type=mime_type
+                        )
 
                         if transcribed:
                             text_content = transcribed
@@ -442,12 +446,14 @@ class TelegramChannel(BaseChannel):
                         logger.exception("Error processing Telegram voice note: %s", exc)
                         text_content = "(Error al procesar nota de voz)"
 
+                from_user = getattr(msg, "from_user", None)
+                chat = getattr(msg, "chat", None)
                 cm = ChannelMessage(
                     channel="telegram",
-                    sender=str(msg.from_user.id) if msg.from_user else "",
+                    sender=str(getattr(from_user, "id", "")) if from_user else "",
                     content=text_content,
-                    message_id=str(msg.message_id),
-                    conversation_id=str(msg.chat.id),
+                    message_id=str(getattr(msg, "message_id", "")),
+                    conversation_id=str(getattr(chat, "id", "")) if chat else "",
                     metadata={"is_voice": is_voice_input},
                 )
                 # Enforce allow-list when configured
@@ -463,11 +469,44 @@ class TelegramChannel(BaseChannel):
                             cm.conversation_id,
                         )
                         return
-                for handler in self._handlers:
+
+                target_chat_id = getattr(msg, "chat_id", None) or getattr(chat, "id", None)
+
+                # Send typing indicator immediately so user sees Jarvis is working
+                if context and getattr(context, "bot", None) and target_chat_id is not None:
                     try:
-                        handler(cm)
+                        await context.bot.send_chat_action(chat_id=target_chat_id, action="typing")
                     except Exception:
-                        logger.exception("Telegram handler error")
+                        pass
+
+                # Keep typing indicator alive in background while handlers process
+                stop_typing = asyncio.Event()
+
+                async def _keep_typing():
+                    while not stop_typing.is_set():
+                        try:
+                            await asyncio.sleep(4.0)
+                            if stop_typing.is_set() or not context or not getattr(context, "bot", None) or target_chat_id is None:
+                                break
+                            await context.bot.send_chat_action(chat_id=target_chat_id, action="typing")
+                        except Exception:
+                            break
+
+                typing_task = asyncio.create_task(_keep_typing())
+                try:
+                    for handler in list(self._handlers):
+                        try:
+                            await asyncio.to_thread(handler, cm)
+                        except Exception:
+                            logger.exception("Telegram handler error")
+                finally:
+                    stop_typing.set()
+                    typing_task.cancel()
+                    try:
+                        await typing_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+
                 if self._bus is not None:
                     self._bus.publish(
                         EventType.CHANNEL_MESSAGE_RECEIVED,
@@ -479,7 +518,18 @@ class TelegramChannel(BaseChannel):
                         },
                     )
 
-            app.add_handler(MessageHandler(filters.TEXT | filters.VOICE | filters.AUDIO, _handle_msg))
+            msg_filter = getattr(filters, "TEXT", None)
+            for extra_name in ("VOICE", "AUDIO"):
+                extra = getattr(filters, extra_name, None)
+                if extra is not None:
+                    try:
+                        msg_filter = msg_filter | extra if msg_filter is not None else extra
+                    except TypeError:
+                        pass
+            if msg_filter is None:
+                msg_filter = getattr(filters, "ALL", None) or getattr(filters, "TEXT", None)
+
+            app.add_handler(MessageHandler(msg_filter, _handle_msg))
             loop.run_until_complete(self._run_polling_lifecycle(app, async_stop_event))
         except Exception:
             logger.debug("Telegram poll loop error", exc_info=True)

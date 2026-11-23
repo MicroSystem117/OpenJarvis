@@ -120,9 +120,8 @@ _GOOGLE_MODELS = [
 _GOOGLE_FALLBACK_CANDIDATES: tuple[str, ...] = (
     "gemini-3.5-flash-lite",
     "gemini-3.5-flash",
-    "gemini-3.6-flash",
-    "gemini-3.8-flash",
-    "gemini-3.1-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
 )
 _MINIMAX_MODELS = [
     "MiniMax-M3",
@@ -1009,54 +1008,34 @@ class CloudEngine(InferenceEngine):
         last_exc: Exception | None = None
 
         for c_idx, candidate in enumerate(model_candidates):
-            max_retries = 2
-            backoff = 1.0
-            candidate_failed = False
-            for attempt in range(max_retries):
-                try:
-                    resp = self._google_client.models.generate_content(
-                        model=candidate,
-                        contents=contents,
-                        config=config,
-                    )
-                    chosen_model = candidate
-                    candidate_failed = False
-                    break
-                except Exception as exc:
-                    last_exc = exc
-                    exc_str = str(exc)
-                    is_transient = (
-                        "503" in exc_str
-                        or "UNAVAILABLE" in exc_str
-                        or "429" in exc_str
-                        or "RESOURCE_EXHAUSTED" in exc_str
-                        or "high demand" in exc_str.lower()
-                    )
-                    if is_transient:
-                        if attempt < max_retries - 1:
-                            logger.warning(
-                                "Google API transient error on '%s' (attempt %d/%d): %s. Retrying in %.1fs...",
-                                candidate,
-                                attempt + 1,
-                                max_retries,
-                                exc,
-                                backoff,
-                            )
-                            time.sleep(backoff)
-                            backoff *= 2
-                        else:
-                            candidate_failed = True
-                    else:
-                        raise
-            if not candidate_failed and resp is not None:
-                break
-            if candidate_failed and c_idx < len(model_candidates) - 1:
-                logger.warning(
-                    "Google model '%s' unavailable (%s). Failing over to candidate '%s'...",
-                    candidate,
-                    last_exc,
-                    model_candidates[c_idx + 1],
+            try:
+                resp = self._google_client.models.generate_content(
+                    model=candidate,
+                    contents=contents,
+                    config=config,
                 )
+                chosen_model = candidate
+                break
+            except Exception as exc:
+                last_exc = exc
+                exc_str = str(exc)
+                is_transient = (
+                    "503" in exc_str
+                    or "UNAVAILABLE" in exc_str
+                    or "429" in exc_str
+                    or "RESOURCE_EXHAUSTED" in exc_str
+                    or "high demand" in exc_str.lower()
+                )
+                if is_transient and c_idx < len(model_candidates) - 1:
+                    logger.warning(
+                        "Google model '%s' transient error (%s). Immediate failover to candidate '%s'...",
+                        candidate,
+                        exc,
+                        model_candidates[c_idx + 1],
+                    )
+                    continue
+                if not is_transient:
+                    raise
 
         if resp is None:
             if last_exc:
