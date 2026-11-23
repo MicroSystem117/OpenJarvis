@@ -62,6 +62,7 @@ _BUILTIN_TOOL_MODULES = (
     "voice_settings",
     "screen_vision",
     "gui_automation",
+    "github_tool",
 )
 
 for _name in _BUILTIN_TOOL_MODULES:
