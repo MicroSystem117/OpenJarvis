@@ -48,10 +48,27 @@ def transcribe_audio_bytes(
     if not audio_bytes:
         return ""
 
+    clean_mime = mime_type.split(";")[0].strip() or "audio/ogg"
     b64_data = base64.b64encode(audio_bytes).decode("utf-8")
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": prompt},
+                    {
+                        "inlineData": {
+                            "mimeType": clean_mime,
+                            "data": b64_data,
+                        }
+                    },
+                ]
+            }
+        ]
+    }
+
     models = [
-        "gemini-3.5-flash-lite",
         "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
         "gemini-3.6-flash",
         "gemini-3.8-flash",
         "gemini-3.1-flash-lite",
