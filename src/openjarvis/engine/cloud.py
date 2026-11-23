@@ -120,8 +120,8 @@ _GOOGLE_MODELS = [
 _GOOGLE_FALLBACK_CANDIDATES: tuple[str, ...] = (
     "gemini-3.5-flash-lite",
     "gemini-3.5-flash",
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
+    "gemini-3.8-flash",
+    "gemini-3.1-flash-lite",
 )
 _MINIMAX_MODELS = [
     "MiniMax-M3",
@@ -1008,34 +1008,44 @@ class CloudEngine(InferenceEngine):
         last_exc: Exception | None = None
 
         for c_idx, candidate in enumerate(model_candidates):
-            try:
-                resp = self._google_client.models.generate_content(
-                    model=candidate,
-                    contents=contents,
-                    config=config,
-                )
-                chosen_model = candidate
-                break
-            except Exception as exc:
-                last_exc = exc
-                exc_str = str(exc)
-                is_transient = (
-                    "503" in exc_str
-                    or "UNAVAILABLE" in exc_str
-                    or "429" in exc_str
-                    or "RESOURCE_EXHAUSTED" in exc_str
-                    or "high demand" in exc_str.lower()
-                )
-                if is_transient and c_idx < len(model_candidates) - 1:
-                    logger.warning(
-                        "Google model '%s' transient error (%s). Immediate failover to candidate '%s'...",
-                        candidate,
-                        exc,
-                        model_candidates[c_idx + 1],
+            max_attempts = 2
+            for attempt in range(max_attempts):
+                try:
+                    resp = self._google_client.models.generate_content(
+                        model=candidate,
+                        contents=contents,
+                        config=config,
                     )
-                    continue
-                if not is_transient:
-                    raise
+                    chosen_model = candidate
+                    break
+                except Exception as exc:
+                    last_exc = exc
+                    exc_str = str(exc)
+                    is_transient = (
+                        "503" in exc_str
+                        or "UNAVAILABLE" in exc_str
+                        or "high demand" in exc_str.lower()
+                    )
+                    if is_transient and attempt < max_attempts - 1:
+                        logger.warning(
+                            "Google model '%s' transient error (%s). Retrying in 1.5s...",
+                            candidate,
+                            exc,
+                        )
+                        time.sleep(1.5)
+                        continue
+                    break
+
+            if resp is not None:
+                break
+
+            if c_idx < len(model_candidates) - 1:
+                logger.warning(
+                    "Google model '%s' unavailable (%s). Failing over to candidate '%s'...",
+                    candidate,
+                    last_exc,
+                    model_candidates[c_idx + 1],
+                )
 
         if resp is None:
             if last_exc:
