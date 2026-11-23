@@ -47,6 +47,10 @@ PRICING: Dict[str, tuple[float, float]] = {
     "gemini-3.1-pro-preview": (2.50, 15.00),
     "gemini-3.1-flash-lite": (0.30, 2.50),
     "gemini-3.1-flash-lite-preview": (0.30, 2.50),
+    "gemini-3.5-flash-lite": (0.15, 0.60),
+    "gemini-3.5-flash": (0.30, 2.50),
+    "gemini-3.6-flash": (0.30, 2.50),
+    "gemini-3.8-flash": (0.30, 2.50),
     "gemini-3-flash-preview": (0.50, 3.00),
     "claude-haiku-4-5-20251001": (1.00, 5.00),
     "MiniMax-M3": (0.30, 1.20),
@@ -101,15 +105,25 @@ _ANTHROPIC_FIXED_SAMPLING_PREFIXES = (
     "claude-haiku-5-5",
 )
 _GOOGLE_MODELS = [
-    "gemini-2.5-pro",
-    "gemini-2.5-flash",
-    "gemini-3-pro",
-    "gemini-3-flash",
-    "gemini-3.1-pro-preview",
+    "gemini-3.5-flash-lite",
+    "gemini-3.5-flash",
+    "gemini-3.6-flash",
+    "gemini-3.8-flash",
     "gemini-3.1-flash-lite",
     "gemini-3.1-flash-lite-preview",
-    "gemini-3-flash-preview",
+    "gemini-3.1-pro-preview",
+    "gemini-3-flash",
+    "gemini-3-pro",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
 ]
+_GOOGLE_FALLBACK_CANDIDATES: tuple[str, ...] = (
+    "gemini-3.5-flash-lite",
+    "gemini-3.5-flash",
+    "gemini-3.6-flash",
+    "gemini-3.8-flash",
+    "gemini-3.1-flash-lite",
+)
 _MINIMAX_MODELS = [
     "MiniMax-M3",
     "MiniMax-M2.7",
@@ -981,33 +995,74 @@ class CloudEngine(InferenceEngine):
                 if response_format.schema:
                     config.response_schema = response_format.schema
 
+        model_candidates: List[str] = [model]
+        fb = kwargs.pop("fallback_model", None)
+        if fb and _is_google_model(fb) and fb not in model_candidates:
+            model_candidates.append(fb)
+        for c in _GOOGLE_FALLBACK_CANDIDATES:
+            if c not in model_candidates:
+                model_candidates.append(c)
+
         t0 = time.monotonic()
-        max_retries = 3
-        backoff = 2.0
         resp = None
-        for attempt in range(max_retries):
-            try:
-                resp = self._google_client.models.generate_content(
-                    model=model,
-                    contents=contents,
-                    config=config,
-                )
-                break
-            except Exception as exc:
-                exc_str = str(exc)
-                is_transient = "503" in exc_str or "UNAVAILABLE" in exc_str or "429" in exc_str or "RESOURCE_EXHAUSTED" in exc_str
-                if is_transient and attempt < max_retries - 1:
-                    logger.warning(
-                        "Google API transient error (attempt %d/%d): %s. Retrying in %.1fs...",
-                        attempt + 1,
-                        max_retries,
-                        exc,
-                        backoff,
+        chosen_model = model
+        last_exc: Exception | None = None
+
+        for c_idx, candidate in enumerate(model_candidates):
+            max_retries = 2
+            backoff = 1.0
+            candidate_failed = False
+            for attempt in range(max_retries):
+                try:
+                    resp = self._google_client.models.generate_content(
+                        model=candidate,
+                        contents=contents,
+                        config=config,
                     )
-                    time.sleep(backoff)
-                    backoff *= 2
-                else:
-                    raise
+                    chosen_model = candidate
+                    candidate_failed = False
+                    break
+                except Exception as exc:
+                    last_exc = exc
+                    exc_str = str(exc)
+                    is_transient = (
+                        "503" in exc_str
+                        or "UNAVAILABLE" in exc_str
+                        or "429" in exc_str
+                        or "RESOURCE_EXHAUSTED" in exc_str
+                        or "high demand" in exc_str.lower()
+                    )
+                    if is_transient:
+                        if attempt < max_retries - 1:
+                            logger.warning(
+                                "Google API transient error on '%s' (attempt %d/%d): %s. Retrying in %.1fs...",
+                                candidate,
+                                attempt + 1,
+                                max_retries,
+                                exc,
+                                backoff,
+                            )
+                            time.sleep(backoff)
+                            backoff *= 2
+                        else:
+                            candidate_failed = True
+                    else:
+                        raise
+            if not candidate_failed and resp is not None:
+                break
+            if candidate_failed and c_idx < len(model_candidates) - 1:
+                logger.warning(
+                    "Google model '%s' unavailable (%s). Failing over to candidate '%s'...",
+                    candidate,
+                    last_exc,
+                    model_candidates[c_idx + 1],
+                )
+
+        if resp is None:
+            if last_exc:
+                raise last_exc
+            raise EngineConnectionError("All Google candidate models failed to respond")
+
         elapsed = time.monotonic() - t0
 
         # Extract text and function_call parts from response
@@ -1054,9 +1109,9 @@ class CloudEngine(InferenceEngine):
                 "completion_tokens": completion_tokens,
                 "total_tokens": prompt_tokens + completion_tokens,
             },
-            "model": model,
+            "model": chosen_model,
             "finish_reason": "stop",
-            "cost_usd": estimate_cost(model, prompt_tokens, completion_tokens),
+            "cost_usd": estimate_cost(chosen_model, prompt_tokens, completion_tokens),
             "ttft": elapsed,
         }
 
@@ -1523,11 +1578,56 @@ class CloudEngine(InferenceEngine):
         if system_text:
             config.system_instruction = system_text
 
-        for chunk in self._google_client.models.generate_content_stream(
-            model=model,
-            contents=contents,
-            config=config,
-        ):
+        model_candidates: List[str] = [model]
+        fb = kwargs.pop("fallback_model", None)
+        if fb and _is_google_model(fb) and fb not in model_candidates:
+            model_candidates.append(fb)
+        for c in _GOOGLE_FALLBACK_CANDIDATES:
+            if c not in model_candidates:
+                model_candidates.append(c)
+
+        stream_iter = None
+        first_chunk = None
+        for idx, candidate in enumerate(model_candidates):
+            try:
+                raw_stream = self._google_client.models.generate_content_stream(
+                    model=candidate,
+                    contents=contents,
+                    config=config,
+                )
+                stream_iter = iter(raw_stream)
+                try:
+                    first_chunk = next(stream_iter)
+                except StopIteration:
+                    first_chunk = None
+                break
+            except Exception as exc:
+                exc_str = str(exc)
+                is_transient = (
+                    "503" in exc_str
+                    or "UNAVAILABLE" in exc_str
+                    or "429" in exc_str
+                    or "RESOURCE_EXHAUSTED" in exc_str
+                    or "high demand" in exc_str.lower()
+                )
+                if is_transient and idx < len(model_candidates) - 1:
+                    logger.warning(
+                        "Google streaming model '%s' unavailable: %s. Failing over to '%s'...",
+                        candidate,
+                        exc,
+                        model_candidates[idx + 1],
+                    )
+                    continue
+                raise
+
+        def _iter_chunks(first: Any, rest: Any):
+            if first is not None:
+                yield first
+            if rest is not None:
+                for chunk in rest:
+                    yield chunk
+
+        for chunk in _iter_chunks(first_chunk, stream_iter):
             if chunk.text:
                 yield chunk.text
 
@@ -1605,14 +1705,59 @@ class CloudEngine(InferenceEngine):
         if tools:
             config.tools = [{"function_declarations": _convert_tools_to_google(tools)}]
 
+        model_candidates: List[str] = [model]
+        fb = kwargs.pop("fallback_model", None)
+        if fb and _is_google_model(fb) and fb not in model_candidates:
+            model_candidates.append(fb)
+        for c in _GOOGLE_FALLBACK_CANDIDATES:
+            if c not in model_candidates:
+                model_candidates.append(c)
+
+        stream_iter = None
+        first_chunk = None
+        for idx, candidate in enumerate(model_candidates):
+            try:
+                raw_stream = self._google_client.models.generate_content_stream(
+                    model=candidate,
+                    contents=contents,
+                    config=config,
+                )
+                stream_iter = iter(raw_stream)
+                try:
+                    first_chunk = next(stream_iter)
+                except StopIteration:
+                    first_chunk = None
+                break
+            except Exception as exc:
+                exc_str = str(exc)
+                is_transient = (
+                    "503" in exc_str
+                    or "UNAVAILABLE" in exc_str
+                    or "429" in exc_str
+                    or "RESOURCE_EXHAUSTED" in exc_str
+                    or "high demand" in exc_str.lower()
+                )
+                if is_transient and idx < len(model_candidates) - 1:
+                    logger.warning(
+                        "Google streaming model '%s' unavailable: %s. Failing over to '%s'...",
+                        candidate,
+                        exc,
+                        model_candidates[idx + 1],
+                    )
+                    continue
+                raise
+
+        def _iter_chunks(first: Any, rest: Any):
+            if first is not None:
+                yield first
+            if rest is not None:
+                for c in rest:
+                    yield c
+
         tool_call_count = 0
         stream_id = uuid.uuid4().hex
         final_usage: Dict[str, Any] | None = None
-        for chunk in self._google_client.models.generate_content_stream(
-            model=model,
-            contents=contents,
-            config=config,
-        ):
+        for chunk in _iter_chunks(first_chunk, stream_iter):
             usage_metadata = getattr(chunk, "usage_metadata", None)
             if usage_metadata is not None:
                 prompt_tokens = getattr(usage_metadata, "prompt_token_count", 0) or 0

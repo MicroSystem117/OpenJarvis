@@ -87,7 +87,13 @@ def _analyze_image_gemini(image_path: str, prompt: str) -> str:
         with open(image_path, "rb") as f:
             b64_data = base64.b64encode(f.read()).decode("utf-8")
 
-        models = ["gemini-3.1-flash-lite", "gemini-3.8-flash"]
+        models = [
+            "gemini-3.5-flash-lite",
+            "gemini-3.5-flash",
+            "gemini-3.6-flash",
+            "gemini-3.8-flash",
+            "gemini-3.1-flash-lite",
+        ]
         for m in models:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key}"
             payload = {

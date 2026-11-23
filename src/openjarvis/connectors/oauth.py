@@ -711,6 +711,7 @@ def run_connector_oauth(
     auth_url = f"{provider.auth_endpoint}?{urlencode(params)}"
 
     # Open browser and wait for callback
+    print(f"\n🔗 URL de autorización: {auth_url}\n", flush=True)
     open_browser(auth_url)
     code = _wait_for_callback_code(
         host=provider.callback_host,

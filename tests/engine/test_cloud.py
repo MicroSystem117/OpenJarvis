@@ -913,3 +913,52 @@ class TestCloudEngineDeepSeek:
             engine.generate(
                 [Message(role=Role.USER, content="Hi")], model="deepseek-v4-pro"
             )
+
+
+class TestCloudEngineGoogleFailover:
+    """Test resilient cascade failover for Google Gemini on transient 503 errors."""
+
+    def test_generate_google_cascade_failover(self) -> None:
+        """When the primary model experiences a 503, it fails over to the next healthy candidate."""
+        fake_client = mock.MagicMock()
+
+        class Transient503(Exception):
+            pass
+
+        fake_resp = mock.MagicMock()
+        fake_resp.text = "Hello from fallback model"
+        fake_resp.candidates = [
+            mock.MagicMock(
+                content=mock.MagicMock(
+                    parts=[mock.MagicMock(text="Hello from fallback model", function_call=None)]
+                )
+            )
+        ]
+        fake_resp.usage_metadata = mock.MagicMock(
+            prompt_token_count=10, candidates_token_count=5
+        )
+
+        def side_effect(model: str, contents: Any, config: Any):
+            if model == "gemini-3.1-flash-lite":
+                raise Exception("503 UNAVAILABLE: This model is currently experiencing high demand.")
+            return fake_resp
+
+        fake_client.models.generate_content.side_effect = side_effect
+
+        fake_genai = mock.MagicMock()
+        fake_genai_types = mock.MagicMock()
+        fake_genai.types = fake_genai_types
+
+        engine = CloudEngine.__new__(CloudEngine)
+        engine._google_client = fake_client
+        engine._thought_sigs = {}
+
+        with mock.patch.dict("sys.modules", {"google": mock.MagicMock(), "google.genai": fake_genai, "google.genai.types": fake_genai_types}):
+            result = engine.generate(
+                [Message(role=Role.USER, content="Hi")],
+                model="gemini-3.1-flash-lite",
+            )
+
+        assert result["content"] == "Hello from fallback model"
+        assert result["model"] == "gemini-3.5-flash-lite"
+        assert fake_client.models.generate_content.call_count >= 2

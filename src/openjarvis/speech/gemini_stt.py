@@ -49,38 +49,43 @@ def transcribe_audio_bytes(
         return ""
 
     b64_data = base64.b64encode(audio_bytes).decode("utf-8")
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key={api_key}"
+    models = [
+        "gemini-3.5-flash-lite",
+        "gemini-3.5-flash",
+        "gemini-3.6-flash",
+        "gemini-3.8-flash",
+        "gemini-3.1-flash-lite",
+    ]
 
-    payload = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": prompt},
-                    {
-                        "inlineData": {
-                            "mimeType": mime_type,
-                            "data": b64_data,
-                        }
-                    },
-                ]
-            }
-        ]
-    }
-
-    try:
-        resp = httpx.post(url, json=payload, timeout=25.0)
-        if resp.status_code == 200:
-            data = resp.json()
-            candidates = data.get("candidates", [])
-            if candidates:
-                parts = candidates[0].get("content", {}).get("parts", [])
-                if parts:
-                    return parts[0].get("text", "").strip()
-        logger.warning("Gemini audio transcription failed (%s): %s", resp.status_code, resp.text[:200])
-        return ""
-    except Exception as exc:
-        logger.exception("Gemini audio transcription exception: %s", exc)
-        return ""
+    for m in models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key}"
+        try:
+            resp = httpx.post(url, json=payload, timeout=25.0)
+            if resp.status_code == 200:
+                data = resp.json()
+                candidates = data.get("candidates", [])
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    if parts:
+                        return parts[0].get("text", "").strip()
+            elif resp.status_code in (503, 429):
+                logger.warning(
+                    "Gemini audio transcription transient error (%s) on %s. Trying next model...",
+                    resp.status_code,
+                    m,
+                )
+                continue
+            else:
+                logger.warning(
+                    "Gemini audio transcription failed (%s) on %s: %s",
+                    resp.status_code,
+                    m,
+                    resp.text[:200],
+                )
+        except Exception as exc:
+            logger.warning("Gemini audio transcription exception on %s: %s", m, exc)
+            continue
+    return ""
 
 
 __all__ = ["transcribe_audio_bytes"]
