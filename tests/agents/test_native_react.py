@@ -122,6 +122,44 @@ class TestNativeReActParsing:
         assert "expression" in result["action_input"]
         assert result["final_answer"] == ""
 
+    def test_parse_action_input_variants(self):
+        parse = self._parser()
+        # Test Action_Input with underscore
+        t1 = (
+            "Thought: Agendar evento\n"
+            "Action: google_calendar\n"
+            'Action_Input: {"summary": "Boda", "start_time": "2026-11-27T18:00:00"}'
+        )
+        r1 = parse(t1)
+        assert r1["action"] == "google_calendar"
+        assert "Boda" in r1["action_input"]
+
+        # Test fenced markdown JSON
+        t2 = (
+            "Thought: Agendar evento\n"
+            "Action: google_calendar\n"
+            "Action Input:\n```json\n{\n  \"summary\": \"Boda\",\n  \"start_time\": \"2026-11-27T18:00:00\"\n}\n```"
+        )
+        r2 = parse(t2)
+        assert r2["action"] == "google_calendar"
+        assert "Boda" in r2["action_input"]
+
+        # Test Parameters keyword
+        t3 = (
+            "Action: google_calendar\n"
+            'Parameters: {"summary": "Boda"}'
+        )
+        r3 = parse(t3)
+        assert r3["action"] == "google_calendar"
+        assert "Boda" in r3["action_input"]
+
+    def test_parse_json_parameters_alias(self):
+        parse = self._parser()
+        text = '{"thought": "test", "action": "calculator", "parameters": {"expression": "2+2"}}'
+        result = parse(text)
+        assert result["action"] == "calculator"
+        assert "expression" in result["action_input"]
+
     def test_parse_final_answer(self):
         parse = self._parser()
         text = "Thought: I know the answer.\nFinal Answer: 42"

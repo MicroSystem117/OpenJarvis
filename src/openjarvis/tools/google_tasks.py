@@ -99,9 +99,42 @@ class GoogleTasksTool(BaseTool):
         )
 
     def execute(self, **params: Any) -> ToolResult:
-        action = params.get("action", "")
+        # Defensive unwrapping of nested dicts/arguments
+        for wrapper in ("parameters", "params", "args", "kwargs", "action_input", "input", "data"):
+            sub = params.get(wrapper)
+            if isinstance(sub, dict):
+                params = {**sub, **params}
+            elif isinstance(sub, str):
+                sub_str = sub.strip()
+                if sub_str.startswith("{") and sub_str.endswith("}"):
+                    try:
+                        parsed_sub = json.loads(sub_str)
+                        if isinstance(parsed_sub, dict):
+                            params = {**parsed_sub, **params}
+                    except Exception:
+                        pass
+
+        action = (
+            params.get("action")
+            or params.get("operation")
+            or params.get("command")
+            or params.get("method")
+            or params.get("type")
+            or params.get("mode")
+            or ""
+        )
+
+        # Smart action inference if missing
         if not action:
-            return ToolResult(tool_name=_TOOL_NAME, content="Missing required 'action' parameter.", success=False)
+            if any(params.get(k) for k in ("title", "name", "task", "task_name", "notes")):
+                action = "create_task"
+            elif any(params.get(k) for k in ("task_id", "id")):
+                if params.get("delete") or params.get("remove") or params.get("borrar") or params.get("eliminar"):
+                    action = "delete_task"
+                else:
+                    action = "complete_task"
+            else:
+                action = "list_tasks"
 
         action_map = {
             "list": "list_tasks",
@@ -109,6 +142,7 @@ class GoogleTasksTool(BaseTool):
             "listar": "list_tasks",
             "ver": "list_tasks",
             "tasks": "list_tasks",
+            "get_tasks": "list_tasks",
             "list_lists": "list_tasklists",
             "list_tasklists": "list_tasklists",
             "tasklists": "list_tasklists",
@@ -131,7 +165,7 @@ class GoogleTasksTool(BaseTool):
             "clear_completed": "clear_completed",
             "limpiar": "clear_completed",
         }
-        action = action_map.get(str(action).lower().strip(), action)
+        action = action_map.get(str(action).lower().strip().replace(" ", "_").replace("-", "_"), action)
 
         tasklist = params.get("tasklist") or "@default"
 

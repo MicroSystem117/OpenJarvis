@@ -290,6 +290,22 @@ class ToolExecutor:
                 success=False,
             )
 
+        # Defensive unwrapping: if parameters are nested inside "parameters", "params",
+        # "args", "kwargs", "action_input", "input", or "data", unwrap them so tools receive flat kwargs.
+        for wrapper in ("parameters", "params", "args", "kwargs", "action_input", "input", "data"):
+            sub = params.get(wrapper)
+            if isinstance(sub, dict):
+                params = {**sub, **params}
+            elif isinstance(sub, str):
+                sub_str = sub.strip()
+                if sub_str.startswith("{") and sub_str.endswith("}"):
+                    try:
+                        parsed_sub = json.loads(sub_str)
+                        if isinstance(parsed_sub, dict):
+                            params = {**parsed_sub, **params}
+                    except Exception:
+                        pass
+
         # Rate limiting — checked before any other gate so a hammering
         # agent/skill can't burn through boundary/capability/taint checks.
         if self._rate_limiter is not None:

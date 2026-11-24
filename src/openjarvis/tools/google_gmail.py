@@ -86,9 +86,39 @@ class GoogleGmailTool(BaseTool):
         )
 
     def execute(self, **params: Any) -> ToolResult:
-        action = params.get("action", "")
+        # Defensive unwrapping of nested dicts/arguments
+        for wrapper in ("parameters", "params", "args", "kwargs", "action_input", "input", "data"):
+            sub = params.get(wrapper)
+            if isinstance(sub, dict):
+                params = {**sub, **params}
+            elif isinstance(sub, str):
+                sub_str = sub.strip()
+                if sub_str.startswith("{") and sub_str.endswith("}"):
+                    try:
+                        parsed_sub = json.loads(sub_str)
+                        if isinstance(parsed_sub, dict):
+                            params = {**parsed_sub, **params}
+                    except Exception:
+                        pass
+
+        action = (
+            params.get("action")
+            or params.get("operation")
+            or params.get("command")
+            or params.get("method")
+            or params.get("type")
+            or params.get("mode")
+            or ""
+        )
+
+        # Smart action inference if missing
         if not action:
-            return ToolResult(tool_name=_TOOL_NAME, content="Missing required 'action' parameter.", success=False)
+            if any(params.get(k) for k in ("to", "recipient", "recipients")) or (params.get("subject") and (params.get("body") or params.get("message") or params.get("content"))):
+                action = "send_email"
+            elif any(params.get(k) for k in ("message_id", "id")) and not (params.get("query") or params.get("q")):
+                action = "read_email"
+            else:
+                action = "search_emails"
 
         action_map = {
             "search": "search_emails",
@@ -112,7 +142,7 @@ class GoogleGmailTool(BaseTool):
             "enviar": "send_email",
             "compose": "send_email",
         }
-        action = action_map.get(str(action).lower().strip(), action)
+        action = action_map.get(str(action).lower().strip().replace(" ", "_").replace("-", "_"), action)
 
         try:
             if action == "search_emails":

@@ -104,30 +104,70 @@ class GoogleCalendarTool(BaseTool):
         )
 
     def execute(self, **params: Any) -> ToolResult:
-        action = params.get("action", "")
+        # Defensive unwrapping of nested dicts/arguments
+        for wrapper in ("parameters", "params", "args", "kwargs", "action_input", "input", "data"):
+            sub = params.get(wrapper)
+            if isinstance(sub, dict):
+                params = {**sub, **params}
+            elif isinstance(sub, str):
+                sub_str = sub.strip()
+                if sub_str.startswith("{") and sub_str.endswith("}"):
+                    try:
+                        parsed_sub = json.loads(sub_str)
+                        if isinstance(parsed_sub, dict):
+                            params = {**parsed_sub, **params}
+                    except Exception:
+                        pass
+
+        action = (
+            params.get("action")
+            or params.get("operation")
+            or params.get("command")
+            or params.get("method")
+            or params.get("type")
+            or params.get("mode")
+            or ""
+        )
+
+        # Smart action inference if missing
         if not action:
-            return ToolResult(tool_name=_TOOL_NAME, content="Missing required 'action' parameter.", success=False)
+            if any(params.get(k) for k in ("summary", "title", "start_time", "start", "start_date", "end_time", "end", "event", "name", "date", "datetime")):
+                action = "create_event"
+            elif any(params.get(k) for k in ("event_id", "id")) and not (params.get("summary") or params.get("title")):
+                action = "delete_event"
+            else:
+                action = "list_events"
 
         action_map = {
             "create": "create_event",
+            "create_event": "create_event",
+            "crear": "create_event",
             "add": "create_event",
+            "add_event": "create_event",
             "new": "create_event",
             "agendar": "create_event",
+            "agenda": "create_event",
             "programar": "create_event",
             "schedule": "create_event",
+            "evento": "create_event",
+            "insert": "create_event",
             "list": "list_events",
+            "list_events": "list_events",
             "get": "list_events",
             "view": "list_events",
             "show": "list_events",
             "listar": "list_events",
             "ver": "list_events",
+            "consultar": "list_events",
             "delete": "delete_event",
+            "delete_event": "delete_event",
             "remove": "delete_event",
             "cancel": "delete_event",
+            "cancelar": "delete_event",
             "borrar": "delete_event",
             "eliminar": "delete_event",
         }
-        action = action_map.get(str(action).lower().strip(), action)
+        action = action_map.get(str(action).lower().strip().replace(" ", "_").replace("-", "_"), action)
 
         calendar_id = params.get("calendar_id") or "primary"
 
@@ -145,11 +185,24 @@ class GoogleCalendarTool(BaseTool):
             return ToolResult(tool_name=_TOOL_NAME, content=f"Google Calendar error: {exc}", success=False)
 
     def _create_event(self, params: Dict[str, Any], calendar_id: str) -> ToolResult:
-        summary = (params.get("summary") or params.get("title") or "").strip()
+        summary = (
+            params.get("summary")
+            or params.get("title")
+            or params.get("event")
+            or params.get("name")
+            or ""
+        ).strip()
         if not summary:
             return ToolResult(tool_name=_TOOL_NAME, content="'summary' is required to create an event.", success=False)
 
-        start_raw = str(params.get("start_time") or params.get("start") or "").strip()
+        start_raw = str(
+            params.get("start_time")
+            or params.get("start")
+            or params.get("date")
+            or params.get("datetime")
+            or params.get("start_date")
+            or ""
+        ).strip()
         if not start_raw:
             return ToolResult(tool_name=_TOOL_NAME, content="'start_time' is required to create an event.", success=False)
 

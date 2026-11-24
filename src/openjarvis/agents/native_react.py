@@ -89,7 +89,11 @@ def _parse_json_response(text: str) -> dict[str, str]:
             raise ValueError("Expected one JSON object")
         fields = {}
         for key, value in payload.items():
-            name = key.strip().lower().replace(" ", "_")
+            name = key.strip().lower().replace(" ", "_").replace("-", "_")
+            if name in ("parameters", "arguments", "args", "params", "tool_input", "input") and "action_input" not in payload:
+                name = "action_input"
+            elif name in ("tool", "action_name") and "action" not in payload:
+                name = "action"
             if name in result:
                 if name in fields:
                     raise ValueError("Ambiguous ReAct JSON fields")
@@ -203,7 +207,7 @@ class NativeReActAgent(ToolUsingAgent):
 
         # Extract Thought
         thought_match = re.search(
-            r"Thought:\s*(.+?)(?=\nAction:|\nFinal Answer:|\Z)",
+            r"Thought:\s*(.+?)(?=\n(?:Action|Tool|Final[ _-]Answer|Respuesta Final):|\Z)",
             text,
             re.DOTALL | re.IGNORECASE,
         )
@@ -212,24 +216,32 @@ class NativeReActAgent(ToolUsingAgent):
 
         # Check for Final Answer
         final_match = re.search(
-            r"Final Answer:\s*(.+)", text, re.DOTALL | re.IGNORECASE
+            r"(?:Final[ _-]Answer|Respuesta Final):\s*(.+)", text, re.DOTALL | re.IGNORECASE
         )
         if final_match:
             result["final_answer"] = final_match.group(1).strip()
             return result
 
         # Extract Action and Action Input
-        action_match = re.search(r"Action:\s*(.+)", text, re.IGNORECASE)
+        action_match = re.search(r"(?:Action|Tool):\s*(.+)", text, re.IGNORECASE)
         if action_match:
-            result["action"] = action_match.group(1).strip()
+            result["action"] = action_match.group(1).splitlines()[0].strip().strip("`*\"'").strip()
 
         input_match = re.search(
-            r"Action Input:\s*(.+?)(?=\n\n|\nThought:|\Z)",
+            r"(?:Action[ _-]Input|Arguments|Parameters):\s*(.+?)(?=\n(?:Thought|Action|Tool|Final[ _-]Answer|Respuesta Final|Observation):|\Z)",
             text,
             re.DOTALL | re.IGNORECASE,
         )
         if input_match:
-            result["action_input"] = input_match.group(1).strip()
+            raw_input = input_match.group(1).strip()
+            fenced = re.search(r"```(?:json)?\s*([{\[].*?[}\]])\s*```", raw_input, re.DOTALL | re.IGNORECASE)
+            if fenced:
+                raw_input = fenced.group(1).strip()
+            elif raw_input.startswith("```") and raw_input.endswith("```"):
+                lines = raw_input.splitlines()
+                if len(lines) >= 2:
+                    raw_input = "\n".join(lines[1:-1]).strip()
+            result["action_input"] = raw_input
 
         return result
 

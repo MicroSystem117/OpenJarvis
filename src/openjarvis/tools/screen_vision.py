@@ -180,9 +180,13 @@ class ScreenVisionTool(BaseTool):
         )
 
     def execute(self, **params: Any) -> ToolResult:
-        action = params.get("action", "")
+        action = params.get("action") or params.get("operation") or ""
         if not action:
-            return ToolResult(tool_name=_TOOL_NAME, content="Missing required 'action' parameter.", success=False)
+            if any(params.get(k) for k in ("message", "title", "text")):
+                action = "notify"
+            else:
+                action = "screenshot"
+        action = str(action).lower().strip()
 
         try:
             if action == "screenshot":

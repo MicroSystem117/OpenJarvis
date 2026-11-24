@@ -193,9 +193,8 @@ class DailyDigestTool(BaseTool):
         )
 
     def execute(self, **params: Any) -> ToolResult:
-        action = params.get("action", "")
-        if not action:
-            return ToolResult(tool_name=_TOOL_NAME, content="Missing required 'action' parameter.", success=False)
+        action = params.get("action") or params.get("operation") or "get_briefing"
+        action = str(action).lower().strip()
 
         try:
             briefing = build_daily_briefing()

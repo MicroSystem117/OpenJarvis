@@ -156,9 +156,14 @@ class RemindersTool(BaseTool):
         )
 
     def execute(self, **params: Any) -> ToolResult:
-        action = params.get("action", "")
+        action = params.get("action") or params.get("operation") or params.get("command") or ""
         if not action:
-            return ToolResult(tool_name=_TOOL_NAME, content="Missing required 'action' parameter.", success=False)
+            if any(params.get(k) for k in ("message", "text", "reminder", "time", "due")):
+                action = "create_reminder"
+            elif any(params.get(k) for k in ("reminder_id", "id")):
+                action = "cancel_reminder"
+            else:
+                action = "list_reminders"
 
         action_map = {
             "create": "create_reminder",

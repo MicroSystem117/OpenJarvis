@@ -73,9 +73,42 @@ class GoogleDriveTool(BaseTool):
         )
 
     def execute(self, **params: Any) -> ToolResult:
-        action = params.get("action", "")
+        # Defensive unwrapping of nested dicts/arguments
+        for wrapper in ("parameters", "params", "args", "kwargs", "action_input", "input", "data"):
+            sub = params.get(wrapper)
+            if isinstance(sub, dict):
+                params = {**sub, **params}
+            elif isinstance(sub, str):
+                sub_str = sub.strip()
+                if sub_str.startswith("{") and sub_str.endswith("}"):
+                    try:
+                        parsed_sub = json.loads(sub_str)
+                        if isinstance(parsed_sub, dict):
+                            params = {**parsed_sub, **params}
+                    except Exception:
+                        pass
+
+        action = (
+            params.get("action")
+            or params.get("operation")
+            or params.get("command")
+            or params.get("method")
+            or params.get("type")
+            or params.get("mode")
+            or ""
+        )
+
+        # Smart action inference if missing
         if not action:
-            return ToolResult(tool_name=_TOOL_NAME, content="Missing required 'action' parameter.", success=False)
+            if any(params.get(k) for k in ("file_id", "id")):
+                if params.get("info") or params.get("metadata"):
+                    action = "get_file_info"
+                else:
+                    action = "read_file_content"
+            elif any(params.get(k) for k in ("query", "q", "search")):
+                action = "search_files"
+            else:
+                action = "list_recent"
 
         action_map = {
             "search": "search_files",
@@ -98,7 +131,7 @@ class GoogleDriveTool(BaseTool):
             "view": "read_file_content",
             "leer": "read_file_content",
         }
-        action = action_map.get(str(action).lower().strip(), action)
+        action = action_map.get(str(action).lower().strip().replace(" ", "_").replace("-", "_"), action)
 
         try:
             if action == "search_files":
@@ -248,6 +281,8 @@ class GoogleDriveTool(BaseTool):
         if st != 200:
             return ToolResult(tool_name=_TOOL_NAME, content=f"Could not retrieve file metadata ({st}).", success=False)
 
+        if not isinstance(meta, dict):
+            meta = {}
         mime = meta.get("mimeType", "")
         name = meta.get("name", "Documento")
 

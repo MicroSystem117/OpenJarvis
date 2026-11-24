@@ -89,9 +89,13 @@ class VoiceSettingsTool(BaseTool):
         )
 
     def execute(self, **params: Any) -> ToolResult:
-        action = params.get("action", "")
+        action = params.get("action") or params.get("operation") or ""
         if not action:
-            return ToolResult(tool_name=_TOOL_NAME, content="Missing required 'action' parameter.", success=False)
+            if any(params.get(k) for k in ("voice", "voice_id", "name")):
+                action = "set_voice"
+            else:
+                action = "list_voices"
+        action = str(action).lower().strip()
 
         try:
             if action == "list_voices":
