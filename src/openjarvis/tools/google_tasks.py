@@ -103,6 +103,36 @@ class GoogleTasksTool(BaseTool):
         if not action:
             return ToolResult(tool_name=_TOOL_NAME, content="Missing required 'action' parameter.", success=False)
 
+        action_map = {
+            "list": "list_tasks",
+            "list_tasks": "list_tasks",
+            "listar": "list_tasks",
+            "ver": "list_tasks",
+            "tasks": "list_tasks",
+            "list_lists": "list_tasklists",
+            "list_tasklists": "list_tasklists",
+            "tasklists": "list_tasklists",
+            "create": "create_task",
+            "create_task": "create_task",
+            "add": "create_task",
+            "add_task": "create_task",
+            "new": "create_task",
+            "crear": "create_task",
+            "complete": "complete_task",
+            "complete_task": "complete_task",
+            "done": "complete_task",
+            "completar": "complete_task",
+            "delete": "delete_task",
+            "delete_task": "delete_task",
+            "remove": "delete_task",
+            "borrar": "delete_task",
+            "eliminar": "delete_task",
+            "clear": "clear_completed",
+            "clear_completed": "clear_completed",
+            "limpiar": "clear_completed",
+        }
+        action = action_map.get(str(action).lower().strip(), action)
+
         tasklist = params.get("tasklist") or "@default"
 
         try:
@@ -217,15 +247,28 @@ class GoogleTasksTool(BaseTool):
         return ToolResult(tool_name=_TOOL_NAME, content="Listas de tareas:\n" + "\n".join(lines), success=True)
 
     def _create_task(self, params: Dict[str, Any], tasklist: str) -> ToolResult:
-        title = params.get("title", "").strip()
+        title = str(params.get("title") or params.get("name") or params.get("task") or "").strip()
         if not title:
             return ToolResult(tool_name=_TOOL_NAME, content="'title' is required for create_task.", success=False)
 
         body: Dict[str, Any] = {"title": title}
-        if params.get("notes"):
-            body["notes"] = params["notes"]
-        if params.get("due"):
-            body["due"] = params["due"]
+        notes = params.get("notes") or params.get("description")
+        if notes:
+            body["notes"] = str(notes)
+
+        due_raw = str(params.get("due") or params.get("due_date") or "").strip()
+        if due_raw:
+            # Google Tasks requires RFC 3339 format (e.g. '2026-11-25T00:00:00.000Z')
+            if len(due_raw) == 10 and due_raw.count("-") == 2:
+                body["due"] = f"{due_raw}T00:00:00.000Z"
+            elif " " in due_raw and "T" not in due_raw:
+                parts = due_raw.split(" ", 1)
+                t_part = parts[1] if parts[1].endswith("Z") else f"{parts[1]}Z"
+                body["due"] = f"{parts[0]}T{t_part}"
+            elif "T" in due_raw and not due_raw.endswith("Z") and "+" not in due_raw[-6:] and "-" not in due_raw[-6:]:
+                body["due"] = f"{due_raw}Z"
+            else:
+                body["due"] = due_raw
 
         def _post(token: str) -> tuple[int, Dict[str, Any]]:
             url = f"{_TASKS_API_BASE}/lists/{tasklist}/tasks"

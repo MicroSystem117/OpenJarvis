@@ -90,6 +90,30 @@ class GoogleGmailTool(BaseTool):
         if not action:
             return ToolResult(tool_name=_TOOL_NAME, content="Missing required 'action' parameter.", success=False)
 
+        action_map = {
+            "search": "search_emails",
+            "search_emails": "search_emails",
+            "find": "search_emails",
+            "buscar": "search_emails",
+            "list": "search_emails",
+            "list_emails": "search_emails",
+            "list_messages": "search_emails",
+            "listar": "search_emails",
+            "ver": "search_emails",
+            "inbox": "search_emails",
+            "read": "read_email",
+            "read_email": "read_email",
+            "get": "read_email",
+            "get_email": "read_email",
+            "leer": "read_email",
+            "view": "read_email",
+            "send": "send_email",
+            "send_email": "send_email",
+            "enviar": "send_email",
+            "compose": "send_email",
+        }
+        action = action_map.get(str(action).lower().strip(), action)
+
         try:
             if action == "search_emails":
                 return self._search_emails(params)
@@ -153,7 +177,7 @@ class GoogleGmailTool(BaseTool):
         )
 
     def _read_email(self, params: Dict[str, Any]) -> ToolResult:
-        m_id = params.get("message_id", "").strip()
+        m_id = str(params.get("message_id") or params.get("id") or params.get("email_id") or "").strip()
         if not m_id:
             return ToolResult(tool_name=_TOOL_NAME, content="'message_id' is required for read_email.", success=False)
 
@@ -187,9 +211,9 @@ class GoogleGmailTool(BaseTool):
         )
 
     def _send_email(self, params: Dict[str, Any]) -> ToolResult:
-        to = params.get("to", "").strip()
-        subject = params.get("subject", "").strip()
-        body = params.get("body", "").strip()
+        to = str(params.get("to") or params.get("recipient") or params.get("destinatario") or "").strip()
+        subject = str(params.get("subject") or params.get("asunto") or "").strip()
+        body = str(params.get("body") or params.get("content") or params.get("mensaje") or params.get("text") or "").strip()
 
         if not to or not subject or not body:
             return ToolResult(tool_name=_TOOL_NAME, content="'to', 'subject', and 'body' are required to send an email.", success=False)

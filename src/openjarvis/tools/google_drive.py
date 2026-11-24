@@ -77,6 +77,29 @@ class GoogleDriveTool(BaseTool):
         if not action:
             return ToolResult(tool_name=_TOOL_NAME, content="Missing required 'action' parameter.", success=False)
 
+        action_map = {
+            "search": "search_files",
+            "search_files": "search_files",
+            "find": "search_files",
+            "buscar": "search_files",
+            "list": "list_recent",
+            "list_files": "list_recent",
+            "list_recent": "list_recent",
+            "recent": "list_recent",
+            "listar": "list_recent",
+            "ver": "list_recent",
+            "info": "get_file_info",
+            "get_file_info": "get_file_info",
+            "get_info": "get_file_info",
+            "metadata": "get_file_info",
+            "read": "read_file_content",
+            "read_file": "read_file_content",
+            "read_file_content": "read_file_content",
+            "view": "read_file_content",
+            "leer": "read_file_content",
+        }
+        action = action_map.get(str(action).lower().strip(), action)
+
         try:
             if action == "search_files":
                 return self._search_files(params)
@@ -176,7 +199,7 @@ class GoogleDriveTool(BaseTool):
         )
 
     def _get_file_info(self, params: Dict[str, Any]) -> ToolResult:
-        file_id = params.get("file_id", "").strip()
+        file_id = str(params.get("file_id") or params.get("id") or "").strip()
         if not file_id:
             return ToolResult(tool_name=_TOOL_NAME, content="'file_id' is required.", success=False)
 
@@ -211,7 +234,7 @@ class GoogleDriveTool(BaseTool):
         return ToolResult(tool_name=_TOOL_NAME, content=info, success=True, metadata=data)
 
     def _read_file_content(self, params: Dict[str, Any]) -> ToolResult:
-        file_id = params.get("file_id", "").strip()
+        file_id = str(params.get("file_id") or params.get("id") or "").strip()
         if not file_id:
             return ToolResult(tool_name=_TOOL_NAME, content="'file_id' is required.", success=False)
 

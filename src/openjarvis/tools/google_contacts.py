@@ -76,6 +76,22 @@ class GoogleContactsTool(BaseTool):
         if not action:
             return ToolResult(tool_name=_TOOL_NAME, content="Missing required 'action' parameter.", success=False)
 
+        action_map = {
+            "search": "search_contacts",
+            "search_contacts": "search_contacts",
+            "find": "search_contacts",
+            "buscar": "search_contacts",
+            "list": "list_contacts",
+            "list_contacts": "list_contacts",
+            "listar": "list_contacts",
+            "ver": "list_contacts",
+            "get": "get_contact",
+            "get_contact": "get_contact",
+            "info": "get_contact",
+            "contact": "get_contact",
+        }
+        action = action_map.get(str(action).lower().strip(), action)
+
         try:
             if action == "search_contacts":
                 return self._search_contacts(params)
@@ -187,9 +203,12 @@ class GoogleContactsTool(BaseTool):
         )
 
     def _get_contact(self, params: Dict[str, Any]) -> ToolResult:
-        res_name = params.get("resource_name", "").strip()
+        res_name = str(params.get("resource_name") or params.get("id") or params.get("contact_id") or "").strip()
         if not res_name:
-            return ToolResult(tool_name=_TOOL_NAME, content="'resource_name' is required for get_contact.", success=False)
+            return ToolResult(tool_name=_TOOL_NAME, content="'resource_name' or 'id' is required for get_contact.", success=False)
+
+        if not res_name.startswith("people/"):
+            res_name = f"people/{res_name}"
 
         if not res_name.startswith("people/"):
             res_name = f"people/{res_name}"

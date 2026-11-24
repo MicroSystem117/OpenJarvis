@@ -145,26 +145,36 @@ class GoogleCalendarTool(BaseTool):
             return ToolResult(tool_name=_TOOL_NAME, content=f"Google Calendar error: {exc}", success=False)
 
     def _create_event(self, params: Dict[str, Any], calendar_id: str) -> ToolResult:
-        summary = params.get("summary", "").strip()
+        summary = (params.get("summary") or params.get("title") or "").strip()
         if not summary:
             return ToolResult(tool_name=_TOOL_NAME, content="'summary' is required to create an event.", success=False)
 
-        start_raw = params.get("start_time", "").strip()
+        start_raw = str(params.get("start_time") or params.get("start") or "").strip()
         if not start_raw:
             return ToolResult(tool_name=_TOOL_NAME, content="'start_time' is required to create an event.", success=False)
+
+        # Normalize start_raw
+        if len(start_raw) == 10 and start_raw.count("-") == 2:
+            start_raw = f"{start_raw}T09:00:00"
+        elif " " in start_raw and "T" not in start_raw:
+            start_raw = start_raw.replace(" ", "T")
 
         # Parse start and end times
         try:
             start_dt = datetime.fromisoformat(start_raw.replace("Z", "+00:00"))
         except ValueError:
-            return ToolResult(tool_name=_TOOL_NAME, content=f"Invalid start_time format: '{start_raw}'", success=False)
+            return ToolResult(tool_name=_TOOL_NAME, content=f"Invalid start_time format: '{start_raw}'. Please use ISO format like '2026-11-25T15:00:00'.", success=False)
 
-        end_raw = params.get("end_time", "").strip()
+        end_raw = str(params.get("end_time") or params.get("end") or "").strip()
         if end_raw:
+            if len(end_raw) == 10 and end_raw.count("-") == 2:
+                end_raw = f"{end_raw}T10:00:00"
+            elif " " in end_raw and "T" not in end_raw:
+                end_raw = end_raw.replace(" ", "T")
             try:
                 end_dt = datetime.fromisoformat(end_raw.replace("Z", "+00:00"))
             except ValueError:
-                return ToolResult(tool_name=_TOOL_NAME, content=f"Invalid end_time format: '{end_raw}'", success=False)
+                return ToolResult(tool_name=_TOOL_NAME, content=f"Invalid end_time format: '{end_raw}'.", success=False)
         else:
             end_dt = start_dt + timedelta(hours=1)
 
@@ -221,18 +231,37 @@ class GoogleCalendarTool(BaseTool):
             )
 
     def _list_events(self, params: Dict[str, Any], calendar_id: str) -> ToolResult:
+        max_r = params.get("max_results") or params.get("limit") or params.get("maxResults") or 25
+        try:
+            max_results_val = min(int(max_r), 100)
+        except (ValueError, TypeError):
+            max_results_val = 25
+
         query_params: Dict[str, Any] = {
             "singleEvents": "true",
             "orderBy": "startTime",
-            "maxResults": 25,
+            "maxResults": max_results_val,
         }
         if params.get("time_min"):
-            query_params["timeMin"] = params["time_min"]
+            t_min = str(params["time_min"]).strip()
+            if len(t_min) == 10 and t_min.count("-") == 2:
+                query_params["timeMin"] = f"{t_min}T00:00:00Z"
+            elif "T" in t_min and not t_min.endswith("Z") and "+" not in t_min[-6:] and "-" not in t_min[-6:]:
+                query_params["timeMin"] = f"{t_min}Z"
+            else:
+                query_params["timeMin"] = t_min
         else:
             # Default to today at 00:00:00Z
             query_params["timeMin"] = datetime.now().strftime("%Y-%m-%dT00:00:00Z")
+
         if params.get("time_max"):
-            query_params["timeMax"] = params["time_max"]
+            t_max = str(params["time_max"]).strip()
+            if len(t_max) == 10 and t_max.count("-") == 2:
+                query_params["timeMax"] = f"{t_max}T23:59:59Z"
+            elif "T" in t_max and not t_max.endswith("Z") and "+" not in t_max[-6:] and "-" not in t_max[-6:]:
+                query_params["timeMax"] = f"{t_max}Z"
+            else:
+                query_params["timeMax"] = t_max
         elif params.get("days_ahead") is not None:
             days = int(params["days_ahead"])
             query_params["timeMax"] = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%dT23:59:59Z")
@@ -259,7 +288,7 @@ class GoogleCalendarTool(BaseTool):
             return ToolResult(tool_name=_TOOL_NAME, content=f"Error listando eventos ({status}): {error_msg}", success=False)
 
     def _delete_event(self, params: Dict[str, Any], calendar_id: str) -> ToolResult:
-        event_id = params.get("event_id", "").strip()
+        event_id = str(params.get("event_id") or params.get("id") or "").strip()
         if not event_id:
             return ToolResult(tool_name=_TOOL_NAME, content="'event_id' is required for delete_event.", success=False)
 
