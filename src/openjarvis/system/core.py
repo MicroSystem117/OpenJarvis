@@ -251,9 +251,13 @@ class JarvisSystem:
                         prior_messages=prior_msgs,
                     )
                     reply = result.get("content", "")
-            except Exception:
+            except Exception as exc:
                 logger.exception("Channel message handler error")
-                reply = "Sorry, I encountered an error processing your message."
+                exc_str = str(exc)
+                if "503" in exc_str or "UNAVAILABLE" in exc_str or "high demand" in exc_str.lower():
+                    reply = "Los servidores de Google están experimentando alta demanda en este momento. Por favor, reintenta tu solicitud en unos segundos."
+                else:
+                    reply = "Hubo un error al procesar tu mensaje. Por favor intenta de nuevo en unos momentos."
 
             try:
                 _system.session_store.save_message(

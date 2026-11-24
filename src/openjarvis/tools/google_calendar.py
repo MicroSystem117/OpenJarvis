@@ -108,6 +108,27 @@ class GoogleCalendarTool(BaseTool):
         if not action:
             return ToolResult(tool_name=_TOOL_NAME, content="Missing required 'action' parameter.", success=False)
 
+        action_map = {
+            "create": "create_event",
+            "add": "create_event",
+            "new": "create_event",
+            "agendar": "create_event",
+            "programar": "create_event",
+            "schedule": "create_event",
+            "list": "list_events",
+            "get": "list_events",
+            "view": "list_events",
+            "show": "list_events",
+            "listar": "list_events",
+            "ver": "list_events",
+            "delete": "delete_event",
+            "remove": "delete_event",
+            "cancel": "delete_event",
+            "borrar": "delete_event",
+            "eliminar": "delete_event",
+        }
+        action = action_map.get(str(action).lower().strip(), action)
+
         calendar_id = params.get("calendar_id") or "primary"
 
         try:

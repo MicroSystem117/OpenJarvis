@@ -1047,6 +1047,20 @@ class CloudEngine(InferenceEngine):
                     model_candidates[c_idx + 1],
                 )
 
+        if resp is None and model_candidates:
+            primary = model_candidates[0]
+            try:
+                logger.info("Retrying primary Google model '%s' after cascade...", primary)
+                time.sleep(2.0)
+                resp = self._google_client.models.generate_content(
+                    model=primary,
+                    contents=contents,
+                    config=config,
+                )
+                chosen_model = primary
+            except Exception:
+                pass
+
         if resp is None:
             if last_exc:
                 raise last_exc

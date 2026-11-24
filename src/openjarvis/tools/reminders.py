@@ -160,6 +160,26 @@ class RemindersTool(BaseTool):
         if not action:
             return ToolResult(tool_name=_TOOL_NAME, content="Missing required 'action' parameter.", success=False)
 
+        action_map = {
+            "create": "create_reminder",
+            "add": "create_reminder",
+            "new": "create_reminder",
+            "recordar": "create_reminder",
+            "agendar": "create_reminder",
+            "list": "list_reminders",
+            "get": "list_reminders",
+            "view": "list_reminders",
+            "show": "list_reminders",
+            "listar": "list_reminders",
+            "ver": "list_reminders",
+            "delete": "cancel_reminder",
+            "remove": "cancel_reminder",
+            "cancel": "cancel_reminder",
+            "borrar": "cancel_reminder",
+            "eliminar": "cancel_reminder",
+        }
+        action = action_map.get(str(action).lower().strip(), action)
+
         try:
             if action == "create_reminder":
                 return self._create_reminder(params)
