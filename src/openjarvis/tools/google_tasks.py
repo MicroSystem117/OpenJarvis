@@ -565,6 +565,15 @@ class GoogleTasksTool(BaseTool):
                 deleted_names = []
                 for m in matches:
                     tid = m["id"]
+                    def _patch_done_m(token: str, target_id: str = tid) -> None:
+                        try:
+                            httpx.patch(f"{_TASKS_API_BASE}/lists/{tasklist}/tasks/{target_id}",
+                                        headers={"Authorization": f"Bearer {token}"},
+                                        json={"status": "completed"}, timeout=10.0)
+                        except Exception:
+                            pass
+                    call_with_refresh(_patch_done_m, self._credentials_path)
+
                     def _del_match(token: str, target_id: str = tid) -> tuple[int, Dict[str, Any]]:
                         url = f"{_TASKS_API_BASE}/lists/{tasklist}/tasks/{target_id}"
                         r = httpx.delete(url, headers={"Authorization": f"Bearer {token}"}, timeout=20.0)
@@ -585,6 +594,16 @@ class GoogleTasksTool(BaseTool):
         resolved_id, resolved_title, err = self._find_task(task_id, title, tasklist)
         if err or not resolved_id:
             return ToolResult(tool_name=_TOOL_NAME, content=err or "Tarea no encontrada.", success=False)
+
+        # Mark as completed first to suppress recurring instances from re-spawning
+        def _patch_done(token: str) -> None:
+            try:
+                httpx.patch(f"{_TASKS_API_BASE}/lists/{tasklist}/tasks/{resolved_id}",
+                            headers={"Authorization": f"Bearer {token}"},
+                            json={"status": "completed"}, timeout=10.0)
+            except Exception:
+                pass
+        call_with_refresh(_patch_done, self._credentials_path)
 
         def _del_single(token: str) -> tuple[int, Dict[str, Any]]:
             url = f"{_TASKS_API_BASE}/lists/{tasklist}/tasks/{resolved_id}"

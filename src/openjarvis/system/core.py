@@ -227,7 +227,14 @@ class JarvisSystem:
             )
 
             prior_msgs: List[Message] = []
-            for sm in session.messages:
+            # Keep a rolling window of recent messages to preserve immediate context
+            # without polluting current queries with old, resolved commands (#context-pollution)
+            recent_messages = (
+                session.messages[-10:]
+                if len(session.messages) > 10
+                else session.messages
+            )
+            for sm in recent_messages:
                 try:
                     role = Role(sm.role)
                 except ValueError:
