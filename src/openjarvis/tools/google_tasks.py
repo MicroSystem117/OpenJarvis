@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import re
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 import httpx
 from openjarvis.connectors.google_auth import call_with_refresh
@@ -18,11 +22,112 @@ logger = logging.getLogger(__name__)
 _TOOL_NAME = "google_tasks"
 _DEFAULT_CREDENTIALS_PATH = str(get_config_dir() / "connectors" / "google_tasks.json")
 _TASKS_API_BASE = "https://tasks.googleapis.com/tasks/v1"
+_LOCAL_TZ = ZoneInfo("America/Caracas")
 _PERMISSION_HINT = (
     "❌ Permiso denegado por Google: El token actual de Google Tasks tiene permiso de solo lectura ('tasks.readonly'). "
     "Para crear, completar o borrar tareas en Google Tasks se debe re-autorizar la cuenta con el scope de escritura ('tasks'). "
     "Ejecuta en la terminal: `jarvis connect google --force` para actualizar los permisos en tu navegador."
 )
+
+
+def _parse_due_to_rfc3339(raw: str) -> Tuple[Optional[str], Optional[str]]:
+    """Parse relative time or date string into RFC 3339 format for Google Tasks.
+
+    Returns (rfc3339_str, fallback_note).
+    If parsed successfully -> (formatted_str, None).
+    If unrecognized -> (None, original_str) so it can safely be appended to notes.
+    """
+    if not raw or not isinstance(raw, str):
+        return None, None
+    s = raw.strip()
+    if not s:
+        return None, None
+
+    now_local = datetime.now(_LOCAL_TZ)
+
+    # 1. Regex for hours: 'in 1 hour', '1 hour', 'dentro de 2 horas', 'en 1 hora', '1h', '2 hrs'
+    m_hour = re.search(
+        r"(?:(?:en|dentro\s+de|in)\s+)?(\d+(?:\.\d+)?)\s*(?:hours?|horas?|hrs?|h)\b",
+        s,
+        re.I,
+    )
+    if m_hour:
+        hrs = float(m_hour.group(1))
+        dt = (now_local + timedelta(hours=hrs)).astimezone(timezone.utc)
+        return dt.strftime("%Y-%m-%dT%H:%M:%S.000Z"), None
+
+    # 2. Regex for minutes: 'in 30 mins', '30 minutes', 'en 15 minutos', '10m', '45 min'
+    m_min = re.search(
+        r"(?:(?:en|dentro\s+de|in)\s+)?(\d+(?:\.\d+)?)\s*(?:minutes?|minutos?|mins?|m)\b",
+        s,
+        re.I,
+    )
+    if m_min:
+        mins = float(m_min.group(1))
+        dt = (now_local + timedelta(minutes=mins)).astimezone(timezone.utc)
+        return dt.strftime("%Y-%m-%dT%H:%M:%S.000Z"), None
+
+    # 3. Regex for days: 'in 2 days', '2 dias', 'en 3 días'
+    m_day = re.search(
+        r"(?:(?:en|dentro\s+de|in)\s+)?(\d+)\s*(?:days?|dias?|días?|d)\b",
+        s,
+        re.I,
+    )
+    if m_day:
+        days = int(m_day.group(1))
+        dt = (
+            (now_local + timedelta(days=days))
+            .replace(hour=0, minute=0, second=0, microsecond=0)
+            .astimezone(timezone.utc)
+        )
+        return dt.strftime("%Y-%m-%dT%H:%M:%S.000Z"), None
+
+    # 4. Words: 'tomorrow', 'mañana'
+    if re.search(r"\b(?:tomorrow|mañana)\b", s, re.I):
+        dt = (
+            (now_local + timedelta(days=1))
+            .replace(hour=0, minute=0, second=0, microsecond=0)
+            .astimezone(timezone.utc)
+        )
+        return dt.strftime("%Y-%m-%dT%H:%M:%S.000Z"), None
+
+    # 5. Words: 'today', 'hoy'
+    if re.search(r"\b(?:today|hoy)\b", s, re.I):
+        dt = now_local.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(
+            timezone.utc
+        )
+        return dt.strftime("%Y-%m-%dT%H:%M:%S.000Z"), None
+
+    # 6. Time only: '15:30', '18:00', '3:30 pm'
+    m_time = re.match(r"^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm)?$", s, re.I)
+    if m_time:
+        hr = int(m_time.group(1))
+        mn = int(m_time.group(2))
+        ampm = m_time.group(4)
+        if ampm:
+            if ampm.lower() == "pm" and hr < 12:
+                hr += 12
+            elif ampm.lower() == "am" and hr == 12:
+                hr = 0
+        dt_cand = now_local.replace(hour=hr, minute=mn, second=0, microsecond=0)
+        if dt_cand <= now_local:
+            dt_cand += timedelta(days=1)
+        return dt_cand.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"), None
+
+    # 7. ISO date / datetime: e.g. '2026-11-26', '2026-11-26 15:00:00', '2026-11-26T15:00:00Z'
+    clean_s = s.replace("Z", "+00:00")
+    if len(s) == 10 and s.count("-") == 2:
+        return f"{s}T00:00:00.000Z", None
+    try:
+        dt = datetime.fromisoformat(clean_s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_LOCAL_TZ)
+        return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"), None
+    except Exception:
+        pass
+
+    # Fallback: cannot parse safely into RFC 3339 -> return (None, s) so it won't crash Google Tasks API
+    return None, s
 
 
 @ToolRegistry.register(_TOOL_NAME)
@@ -126,7 +231,7 @@ class GoogleTasksTool(BaseTool):
 
         # Smart action inference if missing
         if not action:
-            if any(params.get(k) for k in ("title", "name", "task", "task_name", "notes")):
+            if any(params.get(k) for k in ("title", "name", "task", "task_name", "task_title", "notes", "description", "content", "summary")):
                 action = "create_task"
             elif any(params.get(k) for k in ("task_id", "id")):
                 if params.get("delete") or params.get("remove") or params.get("borrar") or params.get("eliminar"):
@@ -151,11 +256,17 @@ class GoogleTasksTool(BaseTool):
             "add": "create_task",
             "add_task": "create_task",
             "new": "create_task",
+            "new_task": "create_task",
             "crear": "create_task",
+            "anotar": "create_task",
+            "guardar": "create_task",
+            "save": "create_task",
+            "insert": "create_task",
             "complete": "complete_task",
             "complete_task": "complete_task",
             "done": "complete_task",
             "completar": "complete_task",
+            "finalizar": "complete_task",
             "delete": "delete_task",
             "delete_task": "delete_task",
             "remove": "delete_task",
@@ -281,28 +392,52 @@ class GoogleTasksTool(BaseTool):
         return ToolResult(tool_name=_TOOL_NAME, content="Listas de tareas:\n" + "\n".join(lines), success=True)
 
     def _create_task(self, params: Dict[str, Any], tasklist: str) -> ToolResult:
-        title = str(params.get("title") or params.get("name") or params.get("task") or "").strip()
+        title = str(
+            params.get("title")
+            or params.get("task")
+            or params.get("task_title")
+            or params.get("name")
+            or params.get("content")
+            or params.get("text")
+            or params.get("summary")
+            or ""
+        ).strip()
+        notes = str(
+            params.get("notes")
+            or params.get("description")
+            or params.get("details")
+            or params.get("body")
+            or ""
+        ).strip()
+
+        if not title and notes:
+            title = notes
+            notes = ""
+
         if not title:
             return ToolResult(tool_name=_TOOL_NAME, content="'title' is required for create_task.", success=False)
 
         body: Dict[str, Any] = {"title": title}
-        notes = params.get("notes") or params.get("description")
-        if notes:
-            body["notes"] = str(notes)
 
-        due_raw = str(params.get("due") or params.get("due_date") or "").strip()
+        due_raw = str(
+            params.get("due")
+            or params.get("due_date")
+            or params.get("date")
+            or params.get("time")
+            or params.get("when")
+            or params.get("delay")
+            or ""
+        ).strip()
         if due_raw:
-            # Google Tasks requires RFC 3339 format (e.g. '2026-11-25T00:00:00.000Z')
-            if len(due_raw) == 10 and due_raw.count("-") == 2:
-                body["due"] = f"{due_raw}T00:00:00.000Z"
-            elif " " in due_raw and "T" not in due_raw:
-                parts = due_raw.split(" ", 1)
-                t_part = parts[1] if parts[1].endswith("Z") else f"{parts[1]}Z"
-                body["due"] = f"{parts[0]}T{t_part}"
-            elif "T" in due_raw and not due_raw.endswith("Z") and "+" not in due_raw[-6:] and "-" not in due_raw[-6:]:
-                body["due"] = f"{due_raw}Z"
-            else:
-                body["due"] = due_raw
+            rfc_due, fallback_note = _parse_due_to_rfc3339(due_raw)
+            if rfc_due:
+                body["due"] = rfc_due
+            elif fallback_note:
+                extra_note = f"Vencimiento solicitado: {fallback_note}"
+                notes = f"{notes}\n{extra_note}".strip() if notes else extra_note
+
+        if notes:
+            body["notes"] = notes
 
         def _post(token: str) -> tuple[int, Dict[str, Any]]:
             url = f"{_TASKS_API_BASE}/lists/{tasklist}/tasks"
@@ -319,8 +454,11 @@ class GoogleTasksTool(BaseTool):
             return ToolResult(tool_name=_TOOL_NAME, content=f"Error creando tarea ({status}): {err}", success=False)
 
     def _complete_task(self, params: Dict[str, Any], tasklist: str) -> ToolResult:
-        task_id = (params.get("task_id") or params.get("id") or params.get("task") or "").strip()
-        title = (params.get("title") or params.get("name") or "").strip()
+        task_id = (params.get("task_id") or params.get("id") or "").strip()
+        title = (params.get("title") or params.get("name") or params.get("task") or "").strip()
+        if " " in task_id and not title:
+            title = task_id
+            task_id = ""
         is_all = params.get("all") or title.lower() in ("all", "todas", "todo", "todas las tareas")
 
         if is_all:
@@ -376,8 +514,11 @@ class GoogleTasksTool(BaseTool):
             return ToolResult(tool_name=_TOOL_NAME, content=f"Error completando tarea ({status}): {err}", success=False)
 
     def _delete_task(self, params: Dict[str, Any], tasklist: str) -> ToolResult:
-        task_id = (params.get("task_id") or params.get("id") or params.get("task") or "").strip()
-        title = (params.get("title") or params.get("name") or "").strip()
+        task_id = (params.get("task_id") or params.get("id") or "").strip()
+        title = (params.get("title") or params.get("name") or params.get("task") or "").strip()
+        if " " in task_id and not title:
+            title = task_id
+            task_id = ""
         is_all = params.get("all") or title.lower() in ("all", "todas", "todo", "todas las tareas")
 
         if is_all:
@@ -409,6 +550,37 @@ class GoogleTasksTool(BaseTool):
                 content=f"✅ Se eliminaron {deleted_count} tareas de Google Tasks.",
                 success=True,
             )
+
+        # If title is provided without a specific task_id, look for all matching tasks
+        if not task_id and title:
+            status, items, err = self._fetch_all_tasks(tasklist)
+            if status != 200:
+                return ToolResult(tool_name=_TOOL_NAME, content=f"Error obteniendo tareas ({status}): {err}", success=False)
+            norm_target = title.strip().lower()
+            matches = [it for it in items if norm_target == (it.get("title") or "").strip().lower()]
+            if not matches:
+                matches = [it for it in items if norm_target in (it.get("title") or "").lower()]
+
+            if len(matches) > 1:
+                deleted_names = []
+                for m in matches:
+                    tid = m["id"]
+                    def _del_match(token: str, target_id: str = tid) -> tuple[int, Dict[str, Any]]:
+                        url = f"{_TASKS_API_BASE}/lists/{tasklist}/tasks/{target_id}"
+                        r = httpx.delete(url, headers={"Authorization": f"Bearer {token}"}, timeout=20.0)
+                        try:
+                            return r.status_code, r.json()
+                        except Exception:
+                            return r.status_code, {}
+
+                    st, _ = call_with_refresh(_del_match, self._credentials_path)
+                    if st in (200, 204):
+                        deleted_names.append(m.get("title") or tid)
+                return ToolResult(
+                    tool_name=_TOOL_NAME,
+                    content=f"✅ Se eliminaron {len(deleted_names)} tareas coincidentes con '{title}': {', '.join(deleted_names)}.",
+                    success=True,
+                )
 
         resolved_id, resolved_title, err = self._find_task(task_id, title, tasklist)
         if err or not resolved_id:

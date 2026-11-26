@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 from openjarvis.connectors.telegram_notify import send_telegram_notification
@@ -100,6 +101,96 @@ def ensure_reminders_daemon_started() -> None:
 ensure_reminders_daemon_started()
 
 
+def _parse_reminder_target(params: Dict[str, Any]) -> Tuple[Optional[datetime], str]:
+    now_utc = datetime.now(timezone.utc)
+    now_local = now_utc.astimezone(_LOCAL_TZ)
+
+    # 1. Numeric or string fields for minutes delay
+    for k in ("delay_minutes", "delay", "minutes", "delay_min", "delay_mins", "mins"):
+        v = params.get(k)
+        if v is not None:
+            if isinstance(v, (int, float)):
+                target_utc = now_utc + timedelta(minutes=float(v))
+                target_local = target_utc.astimezone(_LOCAL_TZ)
+                return target_utc, target_local.strftime("%Y-%m-%d %I:%M %p")
+            elif isinstance(v, str) and v.strip():
+                try:
+                    val = float(v.strip())
+                    target_utc = now_utc + timedelta(minutes=val)
+                    target_local = target_utc.astimezone(_LOCAL_TZ)
+                    return target_utc, target_local.strftime("%Y-%m-%d %I:%M %p")
+                except ValueError:
+                    pass
+
+    # 2. Check hours field
+    for k in ("hours", "delay_hours", "delay_hr", "hrs"):
+        v = params.get(k)
+        if v is not None:
+            try:
+                hrs = float(v)
+                target_utc = now_utc + timedelta(hours=hrs)
+                target_local = target_utc.astimezone(_LOCAL_TZ)
+                return target_utc, target_local.strftime("%Y-%m-%d %I:%M %p")
+            except ValueError:
+                pass
+
+    # 3. Check natural language or string time in any date/due/delay/time field
+    candidates = []
+    for k in (
+        "due_datetime", "due_time", "due_date", "due", "time", "datetime",
+        "delay_minutes", "delay", "when", "target_time"
+    ):
+        v = params.get(k)
+        if v and isinstance(v, str):
+            candidates.append(v.strip())
+
+    for s in candidates:
+        # Regex hours: 'in 1 hour', '1 hour', 'dentro de 1 hora', 'en 1 hora', '2 horas', '1h'
+        m_hr = re.search(r"(?:(?:en|dentro\s+de|in)\s+)?(\d+(?:\.\d+)?)\s*(?:hours?|horas?|hrs?|h)\b", s, re.I)
+        if m_hr:
+            hrs = float(m_hr.group(1))
+            target_utc = now_utc + timedelta(hours=hrs)
+            target_local = target_utc.astimezone(_LOCAL_TZ)
+            return target_utc, target_local.strftime("%Y-%m-%d %I:%M %p")
+
+        # Regex minutes: 'in 30 mins', '30 minutes', 'en 15 minutos', '15m'
+        m_mn = re.search(r"(?:(?:en|dentro\s+de|in)\s+)?(\d+(?:\.\d+)?)\s*(?:minutes?|minutos?|mins?|m)\b", s, re.I)
+        if m_mn:
+            mns = float(m_mn.group(1))
+            target_utc = now_utc + timedelta(minutes=mns)
+            target_local = target_utc.astimezone(_LOCAL_TZ)
+            return target_utc, target_local.strftime("%Y-%m-%d %I:%M %p")
+
+        # Regex time: '15:30', '3:30 pm', '18:00'
+        m_time = re.match(r"^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm)?$", s, re.I)
+        if m_time:
+            hr, mn = int(m_time.group(1)), int(m_time.group(2))
+            ampm = m_time.group(4)
+            if ampm:
+                if ampm.lower() == "pm" and hr < 12:
+                    hr += 12
+                elif ampm.lower() == "am" and hr == 12:
+                    hr = 0
+            cand = now_local.replace(hour=hr, minute=mn, second=0, microsecond=0)
+            if cand <= now_local:
+                cand += timedelta(days=1)
+            target_utc = cand.astimezone(timezone.utc)
+            return target_utc, cand.strftime("%Y-%m-%d %I:%M %p")
+
+        # ISO format
+        clean_s = s.replace("Z", "+00:00")
+        try:
+            dt = datetime.fromisoformat(clean_s)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=_LOCAL_TZ)
+            target_utc = dt.astimezone(timezone.utc)
+            return target_utc, dt.astimezone(_LOCAL_TZ).strftime("%Y-%m-%d %I:%M %p")
+        except Exception:
+            pass
+
+    return None, ""
+
+
 @ToolRegistry.register(_TOOL_NAME)
 class RemindersTool(BaseTool):
     """Tool to create, list, and manage proactive natural language reminders via Telegram."""
@@ -114,9 +205,9 @@ class RemindersTool(BaseTool):
             description=(
                 "Create and manage reminders delivered proactively to Telegram. "
                 "Actions: 'create_reminder' with 'message' and either 'delay_minutes' "
-                "(e.g. 15, 60) or 'due_datetime' (ISO string or 'HH:MM'); "
+                "(e.g. 15, 60, '1 hour') or 'due_datetime' (ISO string or 'HH:MM'); "
                 "'list_reminders' to see pending or completed reminders; "
-                "'cancel_reminder' with 'reminder_id' to cancel."
+                "'cancel_reminder' with 'reminder_id' or message search term to cancel."
             ),
             parameters={
                 "type": "object",
@@ -132,7 +223,7 @@ class RemindersTool(BaseTool):
                     },
                     "delay_minutes": {
                         "type": "number",
-                        "description": "Minutes from now when reminder should trigger (e.g. 30, 1.5).",
+                        "description": "Minutes from now when reminder should trigger (e.g. 30, 60, '1 hour').",
                     },
                     "due_datetime": {
                         "type": "string",
@@ -156,9 +247,34 @@ class RemindersTool(BaseTool):
         )
 
     def execute(self, **params: Any) -> ToolResult:
-        action = params.get("action") or params.get("operation") or params.get("command") or ""
+        # Defensive unwrapping of nested dicts/arguments
+        for wrapper in ("parameters", "params", "args", "kwargs", "action_input", "input", "data"):
+            sub = params.get(wrapper)
+            if isinstance(sub, dict):
+                params = {**sub, **params}
+            elif isinstance(sub, str):
+                sub_str = sub.strip()
+                if sub_str.startswith("{") and sub_str.endswith("}"):
+                    try:
+                        parsed_sub = json.loads(sub_str)
+                        if isinstance(parsed_sub, dict):
+                            params = {**parsed_sub, **params}
+                    except Exception:
+                        pass
+
+        action = (
+            params.get("action")
+            or params.get("operation")
+            or params.get("command")
+            or params.get("method")
+            or params.get("type")
+            or ""
+        )
         if not action:
-            if any(params.get(k) for k in ("message", "text", "reminder", "time", "due")):
+            if any(params.get(k) for k in (
+                "message", "text", "reminder", "task", "title", "note", "content",
+                "delay_minutes", "delay", "minutes", "hours", "time", "due", "due_datetime", "when"
+            )):
                 action = "create_reminder"
             elif any(params.get(k) for k in ("reminder_id", "id")):
                 action = "cancel_reminder"
@@ -167,23 +283,40 @@ class RemindersTool(BaseTool):
 
         action_map = {
             "create": "create_reminder",
+            "create_reminder": "create_reminder",
             "add": "create_reminder",
+            "add_reminder": "create_reminder",
             "new": "create_reminder",
+            "remind": "create_reminder",
+            "reminder": "create_reminder",
+            "set": "create_reminder",
+            "set_reminder": "create_reminder",
             "recordar": "create_reminder",
+            "recordatorio": "create_reminder",
+            "programar": "create_reminder",
             "agendar": "create_reminder",
+            "schedule": "create_reminder",
+            "schedule_reminder": "create_reminder",
+            "notify": "create_reminder",
+            "alerta": "create_reminder",
             "list": "list_reminders",
+            "list_reminders": "list_reminders",
             "get": "list_reminders",
+            "get_reminders": "list_reminders",
             "view": "list_reminders",
             "show": "list_reminders",
             "listar": "list_reminders",
             "ver": "list_reminders",
+            "reminders": "list_reminders",
             "delete": "cancel_reminder",
+            "delete_reminder": "cancel_reminder",
             "remove": "cancel_reminder",
             "cancel": "cancel_reminder",
+            "cancel_reminder": "cancel_reminder",
             "borrar": "cancel_reminder",
             "eliminar": "cancel_reminder",
         }
-        action = action_map.get(str(action).lower().strip(), action)
+        action = action_map.get(str(action).lower().strip().replace(" ", "_").replace("-", "_"), action)
 
         try:
             if action == "create_reminder":
@@ -199,47 +332,25 @@ class RemindersTool(BaseTool):
             return ToolResult(tool_name=_TOOL_NAME, content=f"Reminders error: {exc}", success=False)
 
     def _create_reminder(self, params: Dict[str, Any]) -> ToolResult:
-        message = params.get("message", "").strip()
+        message = str(
+            params.get("message")
+            or params.get("reminder")
+            or params.get("task")
+            or params.get("text")
+            or params.get("title")
+            or params.get("content")
+            or params.get("note")
+            or ""
+        ).strip()
         if not message:
             return ToolResult(tool_name=_TOOL_NAME, content="'message' is required for create_reminder.", success=False)
 
-        delay_min = params.get("delay_minutes")
-        due_str = params.get("due_datetime", "").strip()
-
-        now_utc = datetime.now(timezone.utc)
-        target_utc: Optional[datetime] = None
-        human_time_str = ""
-
-        if delay_min is not None:
-            mins = float(delay_min)
-            target_utc = now_utc + timedelta(minutes=mins)
-            target_local = target_utc.astimezone(_LOCAL_TZ)
-            human_time_str = target_local.strftime("%Y-%m-%d %I:%M %p")
-        elif due_str:
-            # Try parsing time formats
-            if ":" in due_str and "T" not in due_str and "-" not in due_str:
-                parts = due_str.split(":")
-                hour, minute = int(parts[0]), int(parts[1][:2])
-                now_local = datetime.now(_LOCAL_TZ)
-                target_local = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                if target_local <= now_local:
-                    target_local += timedelta(days=1)
-                target_utc = target_local.astimezone(timezone.utc)
-                human_time_str = target_local.strftime("%Y-%m-%d %I:%M %p")
-            else:
-                try:
-                    dt = datetime.fromisoformat(due_str)
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=_LOCAL_TZ)
-                    target_utc = dt.astimezone(timezone.utc)
-                    human_time_str = target_utc.astimezone(_LOCAL_TZ).strftime("%Y-%m-%d %I:%M %p")
-                except Exception:
-                    pass
+        target_utc, human_time_str = _parse_reminder_target(params)
 
         if target_utc is None:
             return ToolResult(
                 tool_name=_TOOL_NAME,
-                content="Debes especificar 'delay_minutes' (ej. 15) o 'due_datetime' válido (ej. '17:30' o '2026-11-22T09:00:00').",
+                content="Debes especificar 'delay_minutes' (ej. 15, '1 hour') o 'due_datetime' válido (ej. '17:30' o '2026-11-22T09:00:00').",
                 success=False,
             )
 
@@ -247,7 +358,7 @@ class RemindersTool(BaseTool):
         entry = {
             "id": rid,
             "message": message,
-            "created_at": now_utc.isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
             "due_time": target_utc.isoformat(),
             "human_time": human_time_str,
             "status": "pending",
@@ -292,23 +403,29 @@ class RemindersTool(BaseTool):
         return ToolResult(tool_name=_TOOL_NAME, content="📋 **Tus Recordatorios:**\n\n" + "\n".join(lines), success=True)
 
     def _cancel_reminder(self, params: Dict[str, Any]) -> ToolResult:
-        rid = params.get("reminder_id", "").strip()
-        if not rid:
-            return ToolResult(tool_name=_TOOL_NAME, content="'reminder_id' is required.", success=False)
+        rid = str(params.get("reminder_id") or params.get("id") or "").strip()
+        search_term = str(params.get("message") or params.get("title") or params.get("task") or "").strip().lower()
+        if not rid and not search_term:
+            return ToolResult(tool_name=_TOOL_NAME, content="'reminder_id' o término de búsqueda requerido.", success=False)
 
         with _reminders_lock:
             items = _load_reminders()
-            found = False
+            cancelled = []
             for r in items:
-                if r.get("id") == rid and r.get("status") == "pending":
-                    r["status"] = "cancelled"
-                    found = True
-                    break
-            if found:
+                if r.get("status") == "pending":
+                    if rid and r.get("id") == rid:
+                        r["status"] = "cancelled"
+                        cancelled.append(r["id"])
+                        break
+                    elif search_term and search_term in (r.get("message") or "").lower():
+                        r["status"] = "cancelled"
+                        cancelled.append(r["id"])
+
+            if cancelled:
                 _save_reminders(items)
-                return ToolResult(tool_name=_TOOL_NAME, content=f"Recordatorio `{rid}` cancelado exitosamente.", success=True)
+                return ToolResult(tool_name=_TOOL_NAME, content=f"Recordatorio(s) cancelado(s) exitosamente: {', '.join(cancelled)}.", success=True)
             else:
-                return ToolResult(tool_name=_TOOL_NAME, content=f"No se encontró un recordatorio pendiente con ID `{rid}`.", success=False)
+                return ToolResult(tool_name=_TOOL_NAME, content="No se encontró ningún recordatorio pendiente que coincida.", success=False)
 
 
 __all__ = ["RemindersTool"]

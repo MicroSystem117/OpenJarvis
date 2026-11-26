@@ -342,6 +342,7 @@ class TelegramChannel(BaseChannel):
         self,
         app: Any,
         async_stop_event: asyncio.Event,
+        drop_pending_updates: bool = True,
     ) -> None:
         """Own PTB's lifecycle so no stop can disappear inside run_polling.
 
@@ -366,7 +367,7 @@ class TelegramChannel(BaseChannel):
                     return
 
             if not await self._run_stage_until_stopped(
-                updater.start_polling(drop_pending_updates=True),
+                updater.start_polling(drop_pending_updates=drop_pending_updates),
                 async_stop_event,
             ):
                 return
@@ -386,8 +387,8 @@ class TelegramChannel(BaseChannel):
             if getattr(app, "post_shutdown", None) is not None:
                 await app.post_shutdown(app)
 
-    def _poll_loop(self) -> None:
-        """Long-poll for updates using python-telegram-bot."""
+    def _poll_once(self, drop_pending_updates: bool = True) -> bool:
+        """Run a single polling cycle. Returns True on normal termination."""
         loop: Any | None = None
         app: Any | None = None
         try:
@@ -530,11 +531,13 @@ class TelegramChannel(BaseChannel):
                 msg_filter = getattr(filters, "ALL", None) or getattr(filters, "TEXT", None)
 
             app.add_handler(MessageHandler(msg_filter, _handle_msg))
-            loop.run_until_complete(self._run_polling_lifecycle(app, async_stop_event))
-        except Exception:
-            logger.debug("Telegram poll loop error", exc_info=True)
-            if not self._stop_event.is_set():
-                self._status = ChannelStatus.ERROR
+            self._status = ChannelStatus.CONNECTED
+            loop.run_until_complete(
+                self._run_polling_lifecycle(
+                    app, async_stop_event, drop_pending_updates=drop_pending_updates
+                )
+            )
+            return True
         finally:
             with self._runtime_lock:
                 self._app = None
@@ -545,6 +548,20 @@ class TelegramChannel(BaseChannel):
                 loop.close()
             if self._stop_event.is_set():
                 self._status = ChannelStatus.DISCONNECTED
+
+    def _poll_loop(self) -> None:
+        """Long-poll for updates using python-telegram-bot with auto-reconnect."""
+        first_attempt = True
+        while not self._stop_event.is_set():
+            try:
+                self._poll_once(drop_pending_updates=first_attempt)
+                first_attempt = False
+                break
+            except Exception as exc:
+                logger.warning("Telegram poll loop error (will retry): %s", exc)
+                if not self._stop_event.is_set():
+                    self._status = ChannelStatus.ERROR
+                    self._stop_event.wait(timeout=3.0)
 
     def _publish_sent(self, channel: str, content: str, conversation_id: str) -> None:
         """Publish a CHANNEL_MESSAGE_SENT event on the bus."""

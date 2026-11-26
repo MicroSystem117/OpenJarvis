@@ -136,14 +136,28 @@ class ScreenVisionTool(BaseTool):
                 "'screenshot' (captures current screen and optionally sends to Telegram), "
                 "'inspect' (captures screen and analyzes it with Gemini Vision to answer user questions about what is on screen), "
                 "'notify' (displays a native KDE desktop notification popup using 'title' and 'message'), "
-                "'lock_screen' (locks user desktop session)."
+                "'lock_screen' (locks user desktop session via 'loginctl lock-session'), "
+                "'unlock_screen' (unlocks user desktop session via 'loginctl unlock-session'), "
+                "'suspend' (suspends the laptop to RAM via 'systemctl suspend'), "
+                "'reboot' (reboots the laptop via 'systemctl reboot'), "
+                "'poweroff' or 'shutdown' (powers off the laptop via 'systemctl poweroff')."
             ),
             parameters={
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["screenshot", "inspect", "notify", "lock_screen"],
+                        "enum": [
+                            "screenshot",
+                            "inspect",
+                            "notify",
+                            "lock_screen",
+                            "unlock_screen",
+                            "suspend",
+                            "reboot",
+                            "poweroff",
+                            "shutdown",
+                        ],
                         "description": "Action to perform.",
                     },
                     "prompt": {
@@ -195,8 +209,16 @@ class ScreenVisionTool(BaseTool):
                 return self._inspect(params)
             elif action == "notify":
                 return self._notify(params)
-            elif action == "lock_screen":
+            elif action in ("lock_screen", "lock", "bloquear", "bloquea"):
                 return self._lock_screen()
+            elif action in ("unlock_screen", "unlock", "desbloquear", "desbloquea"):
+                return self._unlock_screen()
+            elif action in ("suspend", "suspender", "suspende", "dormir", "sleep"):
+                return self._suspend()
+            elif action in ("reboot", "reiniciar", "reinicia", "restart"):
+                return self._reboot()
+            elif action in ("poweroff", "shutdown", "apagar", "apaga"):
+                return self._poweroff()
             else:
                 return ToolResult(tool_name=_TOOL_NAME, content=f"Unknown action: {action}", success=False)
         except Exception as exc:
@@ -283,6 +305,36 @@ class ScreenVisionTool(BaseTool):
             return ToolResult(tool_name=_TOOL_NAME, content="loginctl lock-session falló.", success=False)
         except Exception as exc:
             return ToolResult(tool_name=_TOOL_NAME, content=f"Error al bloquear pantalla: {exc}", success=False)
+
+    def _unlock_screen(self) -> ToolResult:
+        try:
+            res = subprocess.run(["loginctl", "unlock-session"], timeout=5)
+            if res.returncode == 0:
+                return ToolResult(tool_name=_TOOL_NAME, content="🔓 Pantalla desbloqueada correctamente.", success=True)
+            return ToolResult(tool_name=_TOOL_NAME, content="loginctl unlock-session falló.", success=False)
+        except Exception as exc:
+            return ToolResult(tool_name=_TOOL_NAME, content=f"Error al desbloquear pantalla: {exc}", success=False)
+
+    def _suspend(self) -> ToolResult:
+        try:
+            subprocess.Popen(["systemctl", "suspend"])
+            return ToolResult(tool_name=_TOOL_NAME, content="💤 Suspendiendo el equipo (sleep)...", success=True)
+        except Exception as exc:
+            return ToolResult(tool_name=_TOOL_NAME, content=f"Error al suspender el equipo: {exc}", success=False)
+
+    def _reboot(self) -> ToolResult:
+        try:
+            subprocess.Popen(["systemctl", "reboot"])
+            return ToolResult(tool_name=_TOOL_NAME, content="🔄 Reiniciando el equipo...", success=True)
+        except Exception as exc:
+            return ToolResult(tool_name=_TOOL_NAME, content=f"Error al reiniciar el equipo: {exc}", success=False)
+
+    def _poweroff(self) -> ToolResult:
+        try:
+            subprocess.Popen(["systemctl", "poweroff"])
+            return ToolResult(tool_name=_TOOL_NAME, content="🛑 Apagando el equipo...", success=True)
+        except Exception as exc:
+            return ToolResult(tool_name=_TOOL_NAME, content=f"Error al apagar el equipo: {exc}", success=False)
 
 
 __all__ = ["ScreenVisionTool"]

@@ -230,18 +230,34 @@ class SystemStatusTool(BaseTool):
         return ToolSpec(
             name=_TOOL_NAME,
             description=(
-                "Inspect laptop hardware health, resources, and systemd services on CachyOS. "
+                "Inspect laptop hardware health, resources, systemd services, and power/session controls on CachyOS. "
                 "Actions: 'get_status' for full CPU, RAM, NVMe Disk, Battery and top processes metrics; "
                 "'check_alerts' to check if any threshold is exceeded; "
                 "'service_status' to inspect a systemd service; "
-                "'service_logs' to read recent journalctl logs for a service."
+                "'service_logs' to read recent journalctl logs for a service; "
+                "'lock_screen' to lock the desktop screen (loginctl lock-session); "
+                "'unlock_screen' to unlock the desktop screen (loginctl unlock-session); "
+                "'suspend' to suspend/sleep the laptop (systemctl suspend); "
+                "'reboot' to reboot the computer (systemctl reboot); "
+                "'poweroff' or 'shutdown' to turn off the computer (systemctl poweroff)."
             ),
             parameters={
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["get_status", "check_alerts", "service_status", "service_logs"],
+                        "enum": [
+                            "get_status",
+                            "check_alerts",
+                            "service_status",
+                            "service_logs",
+                            "lock_screen",
+                            "unlock_screen",
+                            "suspend",
+                            "reboot",
+                            "poweroff",
+                            "shutdown",
+                        ],
                         "description": "Action to perform.",
                     },
                     "service_name": {
@@ -313,6 +329,45 @@ class SystemStatusTool(BaseTool):
                     return ToolResult(tool_name=_TOOL_NAME, content="'service_name' is required for service_logs.", success=False)
                 res = subprocess.run(["journalctl", "-u", svc, "-n", lines_n, "--no-pager"], capture_output=True, text=True, timeout=10)
                 return ToolResult(tool_name=_TOOL_NAME, content=f"Logs de '{svc}' (últimas {lines_n} líneas):\n\n```\n{res.stdout or res.stderr}\n```", success=True)
+
+            elif action in ("lock_screen", "lock", "bloquear", "bloquea"):
+                try:
+                    res = subprocess.run(["loginctl", "lock-session"], timeout=5)
+                    if res.returncode == 0:
+                        return ToolResult(tool_name=_TOOL_NAME, content="🔒 Pantalla bloqueada correctamente.", success=True)
+                    return ToolResult(tool_name=_TOOL_NAME, content="loginctl lock-session falló.", success=False)
+                except Exception as exc:
+                    return ToolResult(tool_name=_TOOL_NAME, content=f"Error al bloquear pantalla: {exc}", success=False)
+
+            elif action in ("unlock_screen", "unlock", "desbloquear", "desbloquea"):
+                try:
+                    res = subprocess.run(["loginctl", "unlock-session"], timeout=5)
+                    if res.returncode == 0:
+                        return ToolResult(tool_name=_TOOL_NAME, content="🔓 Pantalla desbloqueada correctamente.", success=True)
+                    return ToolResult(tool_name=_TOOL_NAME, content="loginctl unlock-session falló.", success=False)
+                except Exception as exc:
+                    return ToolResult(tool_name=_TOOL_NAME, content=f"Error al desbloquear pantalla: {exc}", success=False)
+
+            elif action in ("suspend", "suspender", "suspende", "dormir", "sleep"):
+                try:
+                    subprocess.Popen(["systemctl", "suspend"])
+                    return ToolResult(tool_name=_TOOL_NAME, content="💤 Suspendiendo el equipo (sleep)...", success=True)
+                except Exception as exc:
+                    return ToolResult(tool_name=_TOOL_NAME, content=f"Error al suspender el equipo: {exc}", success=False)
+
+            elif action in ("reboot", "reiniciar", "reinicia", "restart"):
+                try:
+                    subprocess.Popen(["systemctl", "reboot"])
+                    return ToolResult(tool_name=_TOOL_NAME, content="🔄 Reiniciando el equipo...", success=True)
+                except Exception as exc:
+                    return ToolResult(tool_name=_TOOL_NAME, content=f"Error al reiniciar el equipo: {exc}", success=False)
+
+            elif action in ("poweroff", "shutdown", "apagar", "apaga"):
+                try:
+                    subprocess.Popen(["systemctl", "poweroff"])
+                    return ToolResult(tool_name=_TOOL_NAME, content="🛑 Apagando el equipo...", success=True)
+                except Exception as exc:
+                    return ToolResult(tool_name=_TOOL_NAME, content=f"Error al apagar el equipo: {exc}", success=False)
 
             else:
                 return ToolResult(tool_name=_TOOL_NAME, content=f"Unknown action: {action}", success=False)
