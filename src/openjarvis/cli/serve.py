@@ -438,6 +438,50 @@ def serve(
                         managed_mcp_tools=managed_mcp_tools,
                     )
 
+                    skill_manager = None
+                    skill_catalog_xml = None
+                    skill_few_shot_examples: list[str] = []
+                    if getattr(config, "skills", None) and config.skills.enabled:
+                        try:
+                            from pathlib import Path
+
+                            from openjarvis.skills.manager import SkillManager
+                            from openjarvis.tools._stubs import ToolExecutor
+
+                            pipeline_executor = ToolExecutor(
+                                tools,
+                                bus,
+                                capability_policy=sec.capability_policy,
+                                agent_id=agent_key,
+                                interactive=False,
+                            )
+                            skill_manager = SkillManager(
+                                bus,
+                                capability_policy=sec.capability_policy,
+                            )
+                            skill_paths = [Path(config.skills.skills_dir).expanduser()]
+                            workspace_skills = Path("./skills")
+                            if workspace_skills.exists():
+                                skill_paths.insert(0, workspace_skills)
+                            skill_manager.discover(paths=skill_paths)
+                            skill_manager.set_tool_executor(pipeline_executor)
+
+                            existing = {tool.spec.name for tool in tools}
+                            skill_tools_added = False
+                            for skill_tool in skill_manager.get_skill_tools(
+                                tool_executor=pipeline_executor,
+                            ):
+                                if skill_tool.spec.name not in existing:
+                                    tools.append(skill_tool)
+                                    existing.add(skill_tool.spec.name)
+                                    skill_tools_added = True
+
+                            if skill_tools_added:
+                                skill_catalog_xml = skill_manager.get_catalog_xml()
+                                skill_few_shot_examples = skill_manager.get_few_shot_examples()
+                        except Exception as exc:
+                            logger.warning("Failed to initialize skills in serve: %s", exc)
+
                     if tools:
                         agent_kwargs["tools"] = tools
                     # Reuse these for the scheduler's ToolExecutor (#263).
@@ -476,7 +520,16 @@ def serve(
                         agent_template=config.agent.default_system_prompt or "",
                         memory_files_config=config.memory_files,
                         system_prompt_config=config.system_prompt,
+                        skill_catalog_xml=skill_catalog_xml,
+                        skill_few_shot_examples=skill_few_shot_examples,
                     )
+
+                if (
+                    "skill_few_shot_examples"
+                    in _inspect.signature(agent_cls.__init__).parameters
+                    and skill_few_shot_examples
+                ):
+                    agent_kwargs["skill_few_shot_examples"] = skill_few_shot_examples
 
                 agent = agent_cls(engine, model_name, **agent_kwargs)
                 from openjarvis.security.runtime import wire_agent_security
